@@ -10,7 +10,6 @@ const StreetW: int = 14
 enum Zone { Park, Residential, Commercial, Industrial }
 
 const CStreet: Color = Color("#3b3b40")
-const CRoadMark: Color = Color(0.72, 0.68, 0.42, 0.50)
 
 const CPark := [
     Color("#3d6b4a"),
@@ -173,6 +172,9 @@ func _buildMap() -> void:
     _colors = []
     _details = []
 
+    var cityParkRatio: float = rng.randf_range(0.0, 0.50)
+    var cityIndRatio: float = rng.randf_range(0.0, 0.50)
+
     for row in Rows:
         var zr: Array = []
         var cr: Array = []
@@ -184,18 +186,23 @@ func _buildMap() -> void:
             var corner: bool = (col == 0 or col == Cols - 1) and (row == 0 or row == Rows - 1)
 
             var z: Zone
-            if corner and rng.randf() < 0.72:
-                z = Zone.Park
-            elif rng.randf() < 0.11:
-                z = Zone.Park
-            elif d < 1.6:
+            if d < 1.6:
                 z = Zone.Commercial
             elif d < 3.0:
-                z = Zone.Residential
-            elif rng.randf() < 0.52:
-                z = Zone.Industrial
+                if rng.randf() < 0.07:
+                    z = Zone.Commercial
+                elif rng.randf() < cityParkRatio * 0.5:
+                    z = Zone.Park
+                else:
+                    z = Zone.Residential
             else:
-                z = Zone.Residential
+                var parkChance: float = min(0.95, cityParkRatio * (3.0 if corner else 1.0))
+                if rng.randf() < parkChance:
+                    z = Zone.Park
+                elif rng.randf() < cityIndRatio:
+                    z = Zone.Industrial
+                else:
+                    z = Zone.Residential
 
             var c: Color
             match z:
@@ -313,8 +320,6 @@ func _draw() -> void:
             draw_rect(rect, color)
             _drawZoneDetail(zone, color, details)
 
-    _drawRoadMarkings()
-
     draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
     _drawLegend()
 
@@ -357,42 +362,6 @@ func _drawZoneDetail(z: Zone, c: Color, det: Dictionary) -> void:
             for ln in det.get("lines", []):
                 draw_line(ln[0], ln[1], c.darkened(0.24), 1.0)
 
-
-func _drawRoadMarkings() -> void:
-    var dash: float = 10.0
-    var gap: float = 10.0
-
-    var streetTopY: float = _origin.y
-    for row in Rows + 1:
-        var sw: float = streetW_h[row]
-        if sw >= 2.0:
-            var sy: float = streetTopY + sw * 0.5
-            var x: float = _origin.x
-            while x < MapW - Margin:
-                draw_line(Vector2(x, sy),
-                          Vector2(minf(x + dash, MapW - float(Margin)), sy),
-                          CRoadMark, 1.0)
-                x += dash + gap
-        if row < Rows:
-            streetTopY += sw + rowHeights[row]
-        else:
-            streetTopY += sw
-
-    var streetLeftX: float = _origin.x
-    for col in Cols + 1:
-        var sw: float = streetW_v[col]
-        if sw >= 2.0:
-            var sx: float = streetLeftX + sw * 0.5
-            var y: float = _origin.y
-            while y < MapH - Margin:
-                draw_line(Vector2(sx, y),
-                          Vector2(sx, minf(y + dash, MapH - float(Margin))),
-                          CRoadMark, 1.0)
-                y += dash + gap
-        if col < Cols:
-            streetLeftX += sw + colWidths[col]
-        else:
-            streetLeftX += sw
 
 
 func _drawLegend() -> void:
