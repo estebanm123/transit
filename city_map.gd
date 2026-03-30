@@ -57,6 +57,7 @@ var _font: Font
 
 var _numArms: int = 0
 var _armAngles: Array[float] = []
+var _secondaryCbds: Array = []
 
 var _zoom: float = 1.0
 var _pan: Vector2 = Vector2.ZERO
@@ -191,6 +192,8 @@ func _computeLayout() -> void:
         _rowY.append(cy2)
         cy2 += rowHeights[row] + streetW_h[row + 1]
 
+    _generateSecondaryCbds()
+
 
 func _blockRect(col: int, row: int) -> Rect2:
     return Rect2(_colX[col], _rowY[row], colWidths[col], rowHeights[row])
@@ -203,6 +206,98 @@ func _mergedBlockRect(col: int, row: int) -> Rect2:
     var w: float = _colX[ext.x] + colWidths[ext.x] - x
     var h: float = _rowY[ext.y] + rowHeights[ext.y] - y
     return Rect2(x, y, w, h)
+
+
+func _secondaryCbdDist(col: int, row: int, cbd: Dictionary) -> float:
+    var dx: float = float(col) - cbd.center.x
+    var dy: float = float(row) - cbd.center.y
+    if cbd.type == "circular":
+        return sqrt(dx * dx + dy * dy)
+    var a: float = cbd.angle
+    var along: float = dx * cos(a) + dy * sin(a)
+    var perp: float = -dx * sin(a) + dy * cos(a)
+    var dAlong: float = max(0.0, abs(along) - cbd.halfLen)
+    return sqrt(dAlong * dAlong + perp * perp)
+
+
+func _generateSecondaryCbds() -> void:
+    _secondaryCbds.clear()
+    var count: int = rng.randi_range(0, 5)
+    if count == 0:
+        return
+    var arterialCols: Array[int] = []
+    var arterialRows: Array[int] = []
+    for c in range(1, Cols):
+        if streetW_v[c] >= WArterial:
+            arterialCols.append(c)
+    for r in range(1, Rows):
+        if streetW_h[r] >= WArterial:
+            arterialRows.append(r)
+    if arterialCols.is_empty() and arterialRows.is_empty():
+        return
+    var cx: float = (Cols - 1) / 2.0
+    var cy: float = (Rows - 1) / 2.0
+    var placed: Array = []
+    var attempts: int = 0
+    while placed.size() < count and attempts < 60:
+        attempts += 1
+        var cbdType: String = "circular" if rng.randf() < 0.5 else "linear"
+        var center: Vector2
+        var angle: float = 0.0
+        var halfLen: float = 0.0
+        if cbdType == "linear":
+            var useRow: bool = not arterialRows.is_empty() and \
+                    (arterialCols.is_empty() or rng.randf() < 0.5)
+            if useRow:
+                var ri: int = arterialRows[rng.randi() % arterialRows.size()]
+                center = Vector2(rng.randf_range(8.0, Cols - 9.0), ri - 0.5)
+                angle = 0.0
+            else:
+                var ci: int = arterialCols[rng.randi() % arterialCols.size()]
+                center = Vector2(ci - 0.5, rng.randf_range(6.0, Rows - 7.0))
+                angle = PI * 0.5
+            halfLen = rng.randf_range(3.0, 9.0)
+        else:
+            if not arterialCols.is_empty() and not arterialRows.is_empty() \
+                    and rng.randf() < 0.55:
+                var ci: int = arterialCols[rng.randi() % arterialCols.size()]
+                var ri: int = arterialRows[rng.randi() % arterialRows.size()]
+                center = Vector2(ci - 0.5 + rng.randf_range(-1.5, 1.5),
+                                 ri - 0.5 + rng.randf_range(-1.5, 1.5))
+            elif not arterialCols.is_empty():
+                var ci: int = arterialCols[rng.randi() % arterialCols.size()]
+                center = Vector2(ci - 0.5 + rng.randf_range(-1.5, 1.5),
+                                 rng.randf_range(5.0, Rows - 6.0))
+            else:
+                var ri: int = arterialRows[rng.randi() % arterialRows.size()]
+                center = Vector2(rng.randf_range(5.0, Cols - 6.0),
+                                 ri - 0.5 + rng.randf_range(-1.5, 1.5))
+        if center.distance_to(Vector2(cx, cy)) < 10.0:
+            continue
+        var tooClose: bool = false
+        for existing: Dictionary in placed:
+            if center.distance_to(existing.center) < 8.0:
+                tooClose = true
+                break
+        if tooClose:
+            continue
+        var cc: int = clamp(int(round(center.x)), 0, Cols - 1)
+        var cr: int = clamp(int(round(center.y)), 0, Rows - 1)
+        if not _isInsideCity(cc, cr):
+            continue
+        var coreR: float = rng.randf_range(1.5, 3.5)
+        var fringeR: float = coreR + rng.randf_range(1.5, 3.5)
+        placed.append({
+            "center": center,
+            "type": cbdType,
+            "coreR": coreR,
+            "fringeR": fringeR,
+            "officeRatio": rng.randf_range(0.02, 0.12),
+            "resRatio": rng.randf_range(0.0, 0.80),
+            "angle": angle,
+            "halfLen": halfLen,
+        })
+    _secondaryCbds = placed
 
 
 func _isInsideCity(col: int, row: int) -> bool:
@@ -237,6 +332,7 @@ func _buildMap() -> void:
     var comCore: float = rng.randf_range(1.0, 5.0)
     var comFringe: float = comCore + rng.randf_range(0.6, 3.0)
     var cbdOfficeRatio: float = rng.randf_range(0.015, 0.15)
+    var cbdResRatio: float = rng.randf_range(0.0, 0.80)
 
     for row in Rows:
         var zr: Array = []
@@ -267,7 +363,9 @@ func _buildMap() -> void:
             if not _isInsideCity(col, row):
                 z = Zone.Empty
             elif d < comCore:
-                if rng.randf() < cbdOfficeRatio:
+                if rng.randf() < cbdResRatio:
+                    z = Zone.Residential
+                elif rng.randf() < cbdOfficeRatio:
                     z = Zone.OfficeIndustry
                 else:
                     z = Zone.Commercial
@@ -296,12 +394,35 @@ func _buildMap() -> void:
                     else:
                         z = Zone.Residential
 
+            if z != Zone.Empty:
+                for cbd: Dictionary in _secondaryCbds:
+                    var sdist: float = _secondaryCbdDist(col, row, cbd)
+                    if sdist < cbd.coreR:
+                        if rng.randf() < cbd.resRatio:
+                            z = Zone.Residential
+                        elif rng.randf() < cbd.officeRatio:
+                            z = Zone.OfficeIndustry
+                        else:
+                            z = Zone.Commercial
+                        break
+                    elif sdist < cbd.fringeR:
+                        z = Zone.Commercial if rng.randf() < 0.22 else Zone.Residential
+                        break
+
+            var effectiveDistColor: float = d
+            for cbd: Dictionary in _secondaryCbds:
+                var sdist: float = _secondaryCbdDist(col, row, cbd)
+                if sdist < cbd.fringeR:
+                    effectiveDistColor = min(effectiveDistColor,
+                            sdist * 5.5 / max(0.01, cbd.fringeR))
+                    break
+
             var baseColor: Color
             match z:
                 Zone.Park:
                     baseColor = CPark
                 Zone.Residential:
-                    var idx: int = clamp(int(d), 0, CRes.size() - 1)
+                    var idx: int = clamp(int(effectiveDistColor), 0, CRes.size() - 1)
                     baseColor = CRes[CRes.size() - 1 - idx]
                 Zone.Commercial:
                     baseColor = CCom[rng.randi() % CCom.size()]
@@ -378,7 +499,16 @@ func _buildMap() -> void:
                             and _zones[nb.y][nb.x] == Zone.Commercial:
                         nearCommercial = true
                         break
-            dr.append(_genDetails(z, _colors[row][col], _mergedBlockRect(col, row), d, isOffice, nearCommercial))
+            var effectiveDist: float = d
+            for cbd: Dictionary in _secondaryCbds:
+                var sdist: float = _secondaryCbdDist(col, row, cbd)
+                if sdist < cbd.fringeR:
+                    effectiveDist = min(effectiveDist,
+                            sdist * 5.5 / max(0.01, cbd.fringeR))
+                    if z == Zone.OfficeIndustry and sdist < cbd.coreR:
+                        isOffice = true
+                    break
+            dr.append(_genDetails(z, _colors[row][col], _mergedBlockRect(col, row), effectiveDist, isOffice, nearCommercial))
         _details.append(dr)
 
 
