@@ -55,6 +55,8 @@ var _origin: Vector2 = Vector2(Margin, Margin)
 var _zones: Array
 var _colors: Array
 var _details: Array
+var _parcelOwner: Array = []
+var _parcelExtent: Array = []
 var _font: Font
 
 var _numArms: int = 0
@@ -198,6 +200,15 @@ func _blockRect(col: int, row: int) -> Rect2:
     return Rect2(_colX[col], _rowY[row], colWidths[col], rowHeights[row])
 
 
+func _mergedBlockRect(col: int, row: int) -> Rect2:
+    var ext: Vector2i = _parcelExtent[row][col]
+    var x: float = _colX[col]
+    var y: float = _rowY[row]
+    var w: float = _colX[ext.x] + colWidths[ext.x] - x
+    var h: float = _rowY[ext.y] + rowHeights[ext.y] - y
+    return Rect2(x, y, w, h)
+
+
 func _isInsideCity(col: int, row: int) -> bool:
     var cx: float = (Cols - 1) / 2.0
     var cy: float = (Rows - 1) / 2.0
@@ -223,15 +234,15 @@ func _buildMap() -> void:
     _colors = []
     _details = []
 
-    var cityParkRatio: float = rng.randf_range(0.0, 0.50)
+    var cityParkRatio: float = rng.randf_range(0.0, 0.30)
     var cityIndRatio: float = rng.randf_range(0.0, 0.50)
-    var comCore: float = rng.randf_range(0.4, 2.4)
-    var comFringe: float = comCore + rng.randf_range(0.4, 2.0)
+    var comCore: float = rng.randf_range(1.0, 5.0)
+    var comFringe: float = comCore + rng.randf_range(0.6, 3.0)
+    var cbdOfficeRatio: float = rng.randf_range(0.05, 0.50)
 
     for row in Rows:
         var zr: Array = []
         var cr: Array = []
-        var dr: Array = []
         for col in Cols:
             var dx: float = col - cx
             var dy: float = row - cy
@@ -242,7 +253,10 @@ func _buildMap() -> void:
             if not _isInsideCity(col, row):
                 z = Zone.Empty
             elif d < comCore:
-                z = Zone.Commercial
+                if rng.randf() < cbdOfficeRatio:
+                    z = Zone.OfficeIndustry
+                else:
+                    z = Zone.Commercial
             elif d < comFringe:
                 if rng.randf() < 0.07:
                     z = Zone.Commercial
@@ -277,15 +291,69 @@ func _buildMap() -> void:
 
             zr.append(z)
             cr.append(c)
-            dr.append(_genDetails(z, c, col, row, d))
-
         _zones.append(zr)
         _colors.append(cr)
+
+    _parcelOwner = []
+    _parcelExtent = []
+    for row in Rows:
+        var po: Array = []
+        var pe: Array = []
+        for col in Cols:
+            po.append(Vector2i(col, row))
+            pe.append(Vector2i(col, row))
+        _parcelOwner.append(po)
+        _parcelExtent.append(pe)
+
+    for row in Rows:
+        for col in Cols:
+            if _parcelOwner[row][col] != Vector2i(col, row):
+                continue
+            var z: Zone = _zones[row][col]
+            if z != Zone.Park and z != Zone.OfficeIndustry:
+                continue
+            if rng.randf() > 0.55:
+                continue
+            var mergeLimit: int = 80 if z == Zone.Park else 8
+            var maxC: int = col
+            while maxC + 1 < Cols and maxC - col < mergeLimit \
+                    and _zones[row][maxC + 1] == z \
+                    and _parcelOwner[row][maxC + 1] == Vector2i(maxC + 1, row):
+                maxC += 1
+            var maxR: int = row
+            while maxR + 1 < Rows and maxR - row < mergeLimit:
+                var ok: bool = true
+                for c in range(col, maxC + 1):
+                    if _zones[maxR + 1][c] != z \
+                            or _parcelOwner[maxR + 1][c] != Vector2i(c, maxR + 1):
+                        ok = false
+                        break
+                if not ok:
+                    break
+                maxR += 1
+            if maxC == col and maxR == row:
+                continue
+            for r in range(row, maxR + 1):
+                for c in range(col, maxC + 1):
+                    _parcelOwner[r][c] = Vector2i(col, row)
+            _parcelExtent[row][col] = Vector2i(maxC, maxR)
+
+    for row in Rows:
+        var dr: Array = []
+        for col in Cols:
+            if _parcelOwner[row][col] != Vector2i(col, row):
+                dr.append({})
+                continue
+            var dx: float = col - cx
+            var dy: float = row - cy
+            var d: float = sqrt(dx * dx + dy * dy)
+            var z: Zone = _zones[row][col]
+            var isOffice: bool = (z == Zone.OfficeIndustry and d < comCore)
+            dr.append(_genDetails(z, _colors[row][col], _mergedBlockRect(col, row), d, isOffice))
         _details.append(dr)
 
 
-func _genDetails(z: Zone, _c: Color, col: int, row: int, dist: float = 0.0) -> Dictionary:
-    var rect: Rect2 = _blockRect(col, row)
+func _genDetails(z: Zone, _c: Color, rect: Rect2, dist: float = 0.0, isOffice: bool = false) -> Dictionary:
     var tileScale: float = sqrt(rect.get_area()) / 7.5
     var d: Dictionary = {}
 
@@ -323,8 +391,8 @@ func _genDetails(z: Zone, _c: Color, col: int, row: int, dist: float = 0.0) -> D
             var blds: Array = []
             if floors == 1:
                 for _i in rng.randi_range(max(1, int(1.0 * tileScale)), max(1, int(3.0 * tileScale))):
-                    var bw2: float = rng.randf_range(0.5, max(0.5, min(0.9, rect.size.x * 0.028)))
-                    var bh2: float = rng.randf_range(0.6, max(0.6, min(1.0, rect.size.y * 0.028)))
+                    var bw2: float = rng.randf_range(5.0, max(5.0, min(9.0, rect.size.x * 0.28)))
+                    var bh2: float = rng.randf_range(6.0, max(6.0, min(10.0, rect.size.y * 0.28)))
                     blds.append(Rect2(
                         rect.position.x + rng.randf_range(0.5, max(0.5, rect.size.x - bw2 - 0.5)),
                         rect.position.y + rng.randf_range(0.5, max(0.5, rect.size.y - bh2 - 0.5)),
@@ -340,10 +408,18 @@ func _genDetails(z: Zone, _c: Color, col: int, row: int, dist: float = 0.0) -> D
             d["blds"] = blds
 
         Zone.Commercial:
+            var floors: int
+            if dist < 2.0:
+                floors = rng.randi_range(14, 22)
+            elif dist < 4.0:
+                floors = rng.randi_range(6, 14)
+            else:
+                floors = rng.randi_range(2, 5)
+            d["floors"] = floors
             var blds: Array = []
             for _i in rng.randi_range(max(1, int(1.0 * tileScale)), max(1, int(2.0 * tileScale))):
-                var bw2: float = rng.randf_range(9.0, min(20.0, rect.size.x * 0.55))
-                var bh2: float = rng.randf_range(5.5, min(13.0, rect.size.y * 0.40))
+                var bw2: float = rng.randf_range(6.0, min(18.0, rect.size.x * 0.55))
+                var bh2: float = min(float(floors) * 2.8 + 4.0, rect.size.y - 3.0)
                 blds.append(Rect2(
                     rect.position.x + rng.randf_range(1.5, max(1.5, rect.size.x - bw2 - 1.5)),
                     rect.position.y + rng.randf_range(1.5, max(1.5, rect.size.y - bh2 - 1.5)),
@@ -361,7 +437,7 @@ func _genDetails(z: Zone, _c: Color, col: int, row: int, dist: float = 0.0) -> D
                     rect.position.y + rng.randf_range(1.5, max(1.5, rect.size.y - bh2 - 1.5)),
                     bw2, bh2)
                 blds.append(br)
-                if rng.randf() < 0.40:
+                if not isOffice and rng.randf() < 0.40:
                     stacks.append(Vector2(br.position.x + br.size.x * 0.72, br.position.y))
             var lines: Array = []
             for i in 3:
@@ -390,11 +466,14 @@ func _draw() -> void:
             var zone: Zone = _zones[row][col]
             if zone == Zone.Empty:
                 continue
-            var rect: Rect2 = _blockRect(col, row)
+            if _parcelOwner[row][col] != Vector2i(col, row):
+                continue
+            var ext: Vector2i = _parcelExtent[row][col]
+            var rect: Rect2 = _mergedBlockRect(col, row)
             var sl: float = streetW_v[col]
-            var sr: float = streetW_v[col + 1]
+            var sr: float = streetW_v[ext.x + 1]
             var st: float = streetW_h[row]
-            var sb: float = streetW_h[row + 1]
+            var sb: float = streetW_h[ext.y + 1]
             draw_rect(Rect2(rect.position.x - sl, rect.position.y - st,
                             rect.size.x + sl + sr, rect.size.y + st + sb), CStreet)
             var color: Color = _colors[row][col]
@@ -445,16 +524,27 @@ func _drawZoneDetail(z: Zone, c: Color, det: Dictionary) -> void:
                             xi += 6.0
 
         Zone.Commercial:
+            var floors: int = det.get("floors", 3)
             for b: Rect2 in det.get("blds", []):
                 draw_rect(b, c.darkened(0.44))
                 draw_rect(Rect2(b.position.x, b.position.y, b.size.x, 4.0),
                           c.lightened(0.22))
-                var winY: float = b.position.y + 7.0
-                var winH: float = max(5.0, b.size.y - 11.0)
-                var xi: float = b.position.x + 3.0
-                while xi + 7.0 < b.end.x - 2.0:
-                    draw_rect(Rect2(xi, winY, 7.0, winH), c.lightened(0.38))
-                    xi += 11.0
+                if floors >= 5:
+                    var floorH: float = b.size.y / floors
+                    for f in floors:
+                        var fy: float = b.position.y + f * floorH + 1.0
+                        var winH: float = max(1.5, floorH - 3.0)
+                        var xi: float = b.position.x + 2.0
+                        while xi + 5.0 < b.end.x - 1.5:
+                            draw_rect(Rect2(xi, fy, 5.0, winH), c.lightened(0.38))
+                            xi += 8.0
+                else:
+                    var winY: float = b.position.y + 7.0
+                    var winH: float = max(5.0, b.size.y - 11.0)
+                    var xi: float = b.position.x + 3.0
+                    while xi + 7.0 < b.end.x - 2.0:
+                        draw_rect(Rect2(xi, winY, 7.0, winH), c.lightened(0.38))
+                        xi += 11.0
 
         Zone.OfficeIndustry:
             for b: Rect2 in det.get("blds", []):
