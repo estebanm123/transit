@@ -40,8 +40,12 @@ const ZoomMin: float = 0.15
 const ZoomMax: float = 5.0
 
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-var blockW: float
-var blockH: float
+var colWidths: Array[float] = []
+var rowHeights: Array[float] = []
+var streetW_v: Array[float] = []
+var streetW_h: Array[float] = []
+var _colX: Array[float] = []
+var _rowY: Array[float] = []
 var _origin: Vector2 = Vector2(Margin, Margin)
 
 var _zones: Array
@@ -80,6 +84,11 @@ func _input(event: InputEvent) -> void:
     elif event is InputEventMouseMotion and _dragging:
         _pan = _panOrigin + (event.position - _dragOrigin)
         queue_redraw()
+    elif event is InputEventKey and event.pressed and event.keycode == KEY_R:
+        rng.seed = rng.randi()
+        _computeLayout()
+        _buildMap()
+        queue_redraw()
 
 
 func _zoomAt(screenPos: Vector2, factor: float) -> void:
@@ -91,17 +100,70 @@ func _zoomAt(screenPos: Vector2, factor: float) -> void:
     queue_redraw()
 
 
+func _randomStreetW() -> float:
+    var r: float = rng.randf()
+    if r < 0.08:
+        return 32.0
+    elif r < 0.35:
+        return 18.0
+    else:
+        return 8.0
+
+
 func _computeLayout() -> void:
-    var aw: int = MapW - Margin * 2
-    var ah: int = MapH - Margin * 2
-    blockW = (aw - (Cols + 1) * StreetW) / float(Cols)
-    blockH = (ah - (Rows + 1) * StreetW) / float(Rows)
+    streetW_v.clear()
+    for _i in Cols + 1:
+        streetW_v.append(_randomStreetW())
+
+    streetW_h.clear()
+    for _i in Rows + 1:
+        streetW_h.append(_randomStreetW())
+
+    var totalStreetW: float = 0.0
+    for sw in streetW_v:
+        totalStreetW += sw
+    var totalStreetH: float = 0.0
+    for sh in streetW_h:
+        totalStreetH += sh
+
+    var aw: float = MapW - Margin * 2 - totalStreetW
+    var ah: float = MapH - Margin * 2 - totalStreetH
+
+    var wWeights: Array[float] = []
+    var wSum: float = 0.0
+    for _i in Cols:
+        var w: float = rng.randf_range(0.7, 1.4)
+        wWeights.append(w)
+        wSum += w
+    colWidths.clear()
+    for w in wWeights:
+        colWidths.append(aw * w / wSum)
+
+    var hWeights: Array[float] = []
+    var hSum: float = 0.0
+    for _i in Rows:
+        var h: float = rng.randf_range(0.7, 1.4)
+        hWeights.append(h)
+        hSum += h
+    rowHeights.clear()
+    for h in hWeights:
+        rowHeights.append(ah * h / hSum)
+
+    _colX.clear()
+    var cx2: float = _origin.x + streetW_v[0]
+    for col in Cols:
+        _colX.append(cx2)
+        cx2 += colWidths[col] + streetW_v[col + 1]
+
+    _rowY.clear()
+    var cy2: float = _origin.y + streetW_h[0]
+    for row in Rows:
+        _rowY.append(cy2)
+        cy2 += rowHeights[row] + streetW_h[row + 1]
 
 
 func _blockRect(col: int, row: int) -> Rect2:
-    var x: float = _origin.x + StreetW + col * (blockW + StreetW)
-    var y: float = _origin.y + StreetW + row * (blockH + StreetW)
-    return Rect2(x, y, blockW, blockH)
+    return Rect2(_colX[col], _rowY[row], colWidths[col], rowHeights[row])
 
 
 func _buildMap() -> void:
@@ -300,23 +362,37 @@ func _drawRoadMarkings() -> void:
     var dash: float = 10.0
     var gap: float = 10.0
 
+    var streetTopY: float = _origin.y
     for row in Rows + 1:
-        var sy: float = _origin.y + row * (blockH + StreetW) + StreetW * 0.5
-        var x: float = _origin.x + StreetW
-        while x < MapW - Margin:
-            draw_line(Vector2(x, sy),
-                      Vector2(minf(x + dash, MapW - float(Margin)), sy),
-                      CRoadMark, 1.0)
-            x += dash + gap
+        var sw: float = streetW_h[row]
+        if sw >= 2.0:
+            var sy: float = streetTopY + sw * 0.5
+            var x: float = _origin.x
+            while x < MapW - Margin:
+                draw_line(Vector2(x, sy),
+                          Vector2(minf(x + dash, MapW - float(Margin)), sy),
+                          CRoadMark, 1.0)
+                x += dash + gap
+        if row < Rows:
+            streetTopY += sw + rowHeights[row]
+        else:
+            streetTopY += sw
 
+    var streetLeftX: float = _origin.x
     for col in Cols + 1:
-        var sx: float = _origin.x + col * (blockW + StreetW) + StreetW * 0.5
-        var y: float = _origin.y + StreetW
-        while y < MapH - Margin:
-            draw_line(Vector2(sx, y),
-                      Vector2(sx, minf(y + dash, MapH - float(Margin))),
-                      CRoadMark, 1.0)
-            y += dash + gap
+        var sw: float = streetW_v[col]
+        if sw >= 2.0:
+            var sx: float = streetLeftX + sw * 0.5
+            var y: float = _origin.y
+            while y < MapH - Margin:
+                draw_line(Vector2(sx, y),
+                          Vector2(sx, minf(y + dash, MapH - float(Margin))),
+                          CRoadMark, 1.0)
+                y += dash + gap
+        if col < Cols:
+            streetLeftX += sw + colWidths[col]
+        else:
+            streetLeftX += sw
 
 
 func _drawLegend() -> void:
