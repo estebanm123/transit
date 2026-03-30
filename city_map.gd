@@ -1,10 +1,10 @@
 extends Node2D
 
-const MapW: int = 1280
-const MapH: int = 720
+const MapW: int = 2560
+const MapH: int = 1440
 const Margin: int = 20
-const Cols: int = 10
-const Rows: int = 6
+const Cols: int = 20
+const Rows: int = 12
 const StreetW: int = 14
 
 enum Zone { Park, Residential, Commercial, Industrial }
@@ -36,6 +36,9 @@ const CInd := [
     Color("#90909a"),
 ]
 
+const ZoomMin: float = 0.15
+const ZoomMax: float = 5.0
+
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var blockW: float
 var blockH: float
@@ -46,11 +49,45 @@ var _colors: Array
 var _details: Array
 var _font: Font
 
+var _zoom: float = 1.0
+var _pan: Vector2 = Vector2.ZERO
+var _dragging: bool = false
+var _dragOrigin: Vector2 = Vector2.ZERO
+var _panOrigin: Vector2 = Vector2.ZERO
+
 func _ready() -> void:
     rng.seed = 42
     _font = ThemeDB.fallback_font
     _computeLayout()
     _buildMap()
+    queue_redraw()
+
+
+func _input(event: InputEvent) -> void:
+    if event is InputEventMouseButton:
+        match event.button_index:
+            MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE:
+                if event.pressed:
+                    _dragging = true
+                    _dragOrigin = event.position
+                    _panOrigin = _pan
+                else:
+                    _dragging = false
+            MOUSE_BUTTON_WHEEL_UP:
+                _zoomAt(event.position, 1.15)
+            MOUSE_BUTTON_WHEEL_DOWN:
+                _zoomAt(event.position, 1.0 / 1.15)
+    elif event is InputEventMouseMotion and _dragging:
+        _pan = _panOrigin + (event.position - _dragOrigin)
+        queue_redraw()
+
+
+func _zoomAt(screenPos: Vector2, factor: float) -> void:
+    var newZoom: float = clamp(_zoom * factor, ZoomMin, ZoomMax)
+    if newZoom == _zoom:
+        return
+    _pan = screenPos + (_pan - screenPos) * (newZoom / _zoom)
+    _zoom = newZoom
     queue_redraw()
 
 
@@ -197,6 +234,11 @@ func _genDetails(z: Zone, _c: Color, col: int, row: int) -> Dictionary:
 
 
 func _draw() -> void:
+    var vpSize: Vector2 = get_viewport_rect().size
+    draw_rect(Rect2(Vector2.ZERO, vpSize), Color(0.08, 0.08, 0.08))
+
+    draw_set_transform(_pan, 0.0, Vector2(_zoom, _zoom))
+
     draw_rect(Rect2(0, 0, MapW, MapH), CStreet)
 
     for row in Rows:
@@ -210,6 +252,8 @@ func _draw() -> void:
             _drawZoneDetail(zone, color, details)
 
     _drawRoadMarkings()
+
+    draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
     _drawLegend()
 
 
@@ -290,8 +334,9 @@ func _drawLegend() -> void:
         {"c": CInd[1],  "lbl": "Industrial"},
     ]
 
-    var lx: float = MapW - Lw - 12.0
-    var ly0: float = MapH - items.size() * ItemH - Pad * 2 - 12.0
+    var vpSize: Vector2 = get_viewport_rect().size
+    var lx: float = vpSize.x - Lw - 12.0
+    var ly0: float = vpSize.y - items.size() * ItemH - Pad * 2 - 12.0
 
     draw_rect(
         Rect2(lx - Pad, ly0 - Pad, Lw + Pad * 2, items.size() * ItemH + Pad * 2),
