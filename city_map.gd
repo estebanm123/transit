@@ -233,10 +233,10 @@ func _buildMap() -> void:
     _parcelExtent = []
 
     var cityParkRatio: float = rng.randf_range(0.0, 0.043)
-    var cityIndRatio: float = rng.randf_range(0.0, 0.25)
+    var cityIndRatio: float = rng.randf_range(0.0, 0.04)
     var comCore: float = rng.randf_range(1.0, 5.0)
     var comFringe: float = comCore + rng.randf_range(0.6, 3.0)
-    var cbdOfficeRatio: float = rng.randf_range(0.025, 0.25)
+    var cbdOfficeRatio: float = rng.randf_range(0.015, 0.15)
 
     for row in Rows:
         var zr: Array = []
@@ -284,10 +284,17 @@ func _buildMap() -> void:
                     z = Zone.Park
                 elif rng.randf() < 0.06:
                     z = Zone.Commercial
-                elif rng.randf() < cityIndRatio:
-                    z = Zone.OfficeIndustry
                 else:
-                    z = Zone.Residential
+                    var indChance: float = cityIndRatio
+                    for nb: Vector2i in [Vector2i(col - 1, row), Vector2i(col, row - 1)]:
+                        if nb.x >= 0 and nb.y >= 0 \
+                                and _zones[nb.y][nb.x] == Zone.OfficeIndustry:
+                            indChance = min(0.9, indChance * 5.0)
+                            break
+                    if rng.randf() < indChance:
+                        z = Zone.OfficeIndustry
+                    else:
+                        z = Zone.Residential
 
             var baseColor: Color
             match z:
@@ -307,8 +314,8 @@ func _buildMap() -> void:
             _colors[row][col] = baseColor
 
             if (z == Zone.Park or z == Zone.OfficeIndustry) \
-                    and rng.randf() <= (0.95 if z == Zone.Park else 0.55):
-                var mergeLimit: int = 8 if z == Zone.Park else 1
+                    and rng.randf() <= (0.95 if z == Zone.Park else 0.80):
+                var mergeLimit: int = 7 if z == Zone.Park else 1
                 var maxC: int = col
                 while maxC + 1 < Cols and maxC - col < mergeLimit:
                     var nc: int = maxC + 1
@@ -318,6 +325,8 @@ func _buildMap() -> void:
                     var ndy: float = row - cy
                     var nd2: float = sqrt(ndx * ndx + ndy * ndy)
                     if not _isInsideCity(nc, row) or (z == Zone.Park and nd2 < comCore):
+                        break
+                    if z == Zone.Park and rng.randf() < (maxC - col + 1) * 0.15:
                         break
                     maxC += 1
                 var maxR: int = row
@@ -335,6 +344,8 @@ func _buildMap() -> void:
                             ok = false
                             break
                     if not ok:
+                        break
+                    if z == Zone.Park and rng.randf() < (maxR - row + 1) * 0.15:
                         break
                     maxR += 1
                 if maxC > col or maxR > row:
