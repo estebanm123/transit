@@ -5,6 +5,7 @@ const ZoomMax: float = 5.0
 
 var _generator: CityGenerator
 var _city: City
+var _traffic: Traffic
 var _zoom: float = 1.0
 var _pan: Vector2 = Vector2.ZERO
 var _dragging: bool = false
@@ -18,6 +19,13 @@ func _ready() -> void:
     _generator.rng.seed = 42
     _font = ThemeDB.fallback_font
     _city = _generator.generate()
+    _traffic = Traffic.new()
+    _traffic.init(_city)
+    set_process(true)
+
+
+func _process(delta: float) -> void:
+    _traffic.tick(_city, delta)
     queue_redraw()
 
 
@@ -41,6 +49,7 @@ func _input(event: InputEvent) -> void:
     elif event is InputEventKey and event.pressed and event.keycode == KEY_R:
         _generator.rng.seed = _generator.rng.randi()
         _city = _generator.generate()
+        _traffic.init(_city)
         queue_redraw()
 
 
@@ -80,6 +89,8 @@ func _draw() -> void:
             var color: Color = _city.colors[row][col]
             draw_rect(rect, color)
             _drawZoneDetail(zone, color, _city.details[row][col])
+
+    _traffic.drawCars(self, _city)
 
     draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
     _drawLegend()
