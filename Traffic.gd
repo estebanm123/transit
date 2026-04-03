@@ -1,8 +1,8 @@
 class_name Traffic extends RefCounted
 
 const CarCount: int = 200
-const CarSpeedMin: float = 25.0
-const CarSpeedMax: float = 55.0
+const CarSpeedMin: float = 12.5
+const CarSpeedMax: float = 27.5
 const CarLength: float = 3.5
 const CarWidth: float = 1.8
 
@@ -15,12 +15,30 @@ const CarColors: Array[Color] = [
 	Palette.CPink,
 ]
 
+const PhaseDuration: float = 15.0
+const PhaseNS: int = 0
+const PhaseEW: int = 1
+const StopOffset: float = CarLength * 2.0
+const BrakingDistance: float = 18.0
+
 var _cars: Array = []
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
+var _trafficLights: Dictionary = {}
+var _time: float = 0.0
 
 
 func init(city: City) -> void:
 	_rng.seed = 99991
+	_time = 0.0
+	_trafficLights.clear()
+	for v in range(City.Cols + 1):
+		for h in range(City.Rows + 1):
+			if city.vertStreetWidths[v] >= City.WCollector \
+					and city.horzStreetWidths[h] >= City.WCollector:
+				_trafficLights[Vector2i(v, h)] = {
+					"phase": _rng.randi() % 2,
+					"lastChanged": -_rng.randf_range(0.0, PhaseDuration),
+				}
 	_cars.clear()
 	var attempts: int = 0
 	while _cars.size() < CarCount and attempts < CarCount * 30:
@@ -31,6 +49,7 @@ func init(city: City) -> void:
 
 
 func tick(city: City, delta: float) -> void:
+	_time += delta
 	for car in _cars:
 		_advanceCar(city, car, delta)
 
@@ -43,7 +62,7 @@ func drawCars(canvas: Node2D, city: City) -> void:
 		var segEnd := Vector2(
 				_vertStreetCenterX(city, car.toVertStreet),
 				_horzStreetCenterY(city, car.toHorzStreet))
-		var center: Vector2 = segStart.lerp(segEnd, car.t) + car.laneOffset
+		var center: Vector2 = segStart.lerp(segEnd, car.progress) + car.laneOffset
 		var forward: Vector2 = car.forward
 		var sideways: Vector2 = Vector2(-forward.y, forward.x)
 		canvas.draw_colored_polygon(PackedVector2Array([
@@ -155,7 +174,7 @@ func _spawnCar(city: City) -> Dictionary:
 		"fromHorzStreet": fromHorzStreet,
 		"toVertStreet": toVertStreet,
 		"toHorzStreet": toHorzStreet,
-		"t": _rng.randf(),
+		"progress": _rng.randf(),
 		"speed": _rng.randf_range(CarSpeedMin, CarSpeedMax),
 		"segLength": segLength,
 		"forward": forward,
@@ -164,12 +183,40 @@ func _spawnCar(city: City) -> Dictionary:
 	}
 
 
+func _isRedForCar(car: Dictionary, key: Vector2i) -> bool:
+	var light: Dictionary = _trafficLights[key]
+	var elapsed: float = _time - light.lastChanged
+	if elapsed >= PhaseDuration:
+		light.phase = 1 - light.phase
+		light.lastChanged = _time - fmod(elapsed, PhaseDuration)
+	var isEW: bool = (car.toHorzStreet == car.fromHorzStreet)
+	return (isEW and light.phase == PhaseNS) or (not isEW and light.phase == PhaseEW)
+
+
 func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
-	car.t += car.speed * delta / car.segLength
-	if car.t < 1.0:
+	var key := Vector2i(car.toVertStreet, car.toHorzStreet)
+	var redLight: bool = _trafficLights.has(key) and _isRedForCar(car, key)
+	var stopT: float = maxf(0.0, 1.0 - StopOffset / car.segLength)
+
+	if redLight and car.progress >= stopT:
 		return
 
-	var overflow: float = car.t - 1.0
+	var effectiveSpeed: float = car.speed
+	if redLight:
+		var brakeStartT: float = stopT - BrakingDistance / car.segLength
+		if car.progress > brakeStartT and stopT > brakeStartT:
+			effectiveSpeed = car.speed * (stopT - car.progress) / (stopT - brakeStartT)
+
+	car.progress += effectiveSpeed * delta / car.segLength
+
+	if redLight:
+		car.progress = minf(car.progress, stopT)
+		return
+
+	if car.progress < 1.0:
+		return
+
+	var overflow: float = car.progress - 1.0
 	var arrivedVertStreet: int = car.toVertStreet
 	var arrivedHorzStreet: int = car.toHorzStreet
 
@@ -208,7 +255,7 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
 			if isHorizontalSegment else city.vertStreetWidths[arrivedVertStreet]
 	car.laneOffset = _calcLaneOffset(car.forward, streetWidth)
 
-	car.t = overflow / car.segLength
+	car.progress = overflow / car.segLength
 
 
 func _getExitSegments(city: City, vertStreetIdx: int, horzStreetIdx: int,
