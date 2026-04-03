@@ -1,9 +1,9 @@
 class_name Traffic extends RefCounted
 
 const CarCount: int = 200
-const CarSpeedMin: float = 12.5
-const CarSpeedMax: float = 27.5
-const CarLength: float = 3.5
+const CarSpeedMin: float = 4.25
+const CarSpeedMax: float = 9.35
+const CarLength: float = 2.8
 const CarWidth: float = 1.8
 
 const CarColors: Array[Color] = [
@@ -20,6 +20,8 @@ const PhaseNS: int = 0
 const PhaseEW: int = 1
 const StopOffset: float = CarLength * 2.0
 const BrakingDistance: float = 18.0
+
+const ArterialSpeedMultiplier: float = 2.0
 
 const ZoneWeights: Dictionary = {
     Zone.Park: 2,
@@ -241,7 +243,9 @@ func _spawnCar(city: City) -> Dictionary:
     var forward: Vector2 = (segEnd - segStart) / segLength
     var streetWidth: float = city.horzStreetWidths[fromHorzStreet] \
             if isHorizontalSegment else city.vertStreetWidths[fromVertStreet]
-    var desiredSpeed: float = _rng.randf_range(CarSpeedMin, CarSpeedMax)
+    var baseSpeed: float = _rng.randf_range(CarSpeedMin, CarSpeedMax)
+    var speedMult: float = ArterialSpeedMultiplier if streetWidth >= City.WArterial else 1.0
+    var desiredSpeed: float = baseSpeed * speedMult
 
     return {
         "fromVertStreet": fromVertStreet,
@@ -249,6 +253,7 @@ func _spawnCar(city: City) -> Dictionary:
         "toVertStreet": toVertStreet,
         "toHorzStreet": toHorzStreet,
         "progress": _rng.randf(),
+        "baseSpeed": baseSpeed,
         "desiredSpeed": desiredSpeed,
         "currentSpeed": desiredSpeed,
         "segLength": segLength,
@@ -260,6 +265,7 @@ func _spawnCar(city: City) -> Dictionary:
         "goalTile": Vector2i(0, 0),
         "goalIntersection": Vector2i(0, 0),
         "goalHops": 0,
+        "segmentHistory": [],
     }
 
 
@@ -349,10 +355,26 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
     var streetWidth: float = city.horzStreetWidths[arrivedHorzStreet] \
             if isHorizontalSegment else city.vertStreetWidths[arrivedVertStreet]
     car.laneOffset = _calcLaneOffset(car.forward, streetWidth)
+    car.desiredSpeed = car.baseSpeed \
+            * (ArterialSpeedMultiplier if streetWidth >= City.WArterial else 1.0)
 
     car.progress = overflow / car.segLength
 
     _insertIntoSegment(car)
+
+    var seg := Vector4i(car.fromVertStreet, car.fromHorzStreet,
+            car.toVertStreet, car.toHorzStreet)
+    car.segmentHistory.append(seg)
+    if car.segmentHistory.size() > 8:
+        car.segmentHistory.pop_front()
+    if car.segmentHistory.size() == 8:
+        var looping: bool = true
+        for i in range(4):
+            if car.segmentHistory[i] != car.segmentHistory[i + 4]:
+                looping = false
+                break
+        if looping:
+            _assignGoal(city, car)
 
 
 func _buildTilesByZone(city: City) -> void:
@@ -390,6 +412,7 @@ func _pickGoalTile() -> Vector2i:
 
 
 func _assignGoal(city: City, car: Dictionary) -> void:
+    car.segmentHistory.clear()
     var tile: Vector2i = _pickGoalTile()
     car.goalTile = tile
     var corners: Array[Vector2i] = [

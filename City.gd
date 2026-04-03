@@ -7,9 +7,9 @@ const Cols: int = 100
 const Rows: int = 60
 const StreetW: int = 14
 
-const WArterial: float = 8.0
-const WCollector: float = 4.0
-const WLocal: float = 1.5
+const WArterial: float = 10.1
+const WCollector: float = 6.1
+const WLocal: float = 3.6
 
 const CCountryside: Color = Palette.CGreenDark
 const CStreet: Color = Palette.CGrayDeep
