@@ -6,13 +6,13 @@ const CarSpeedMax: float = 55.0
 const CarLength: float = 3.5
 const CarWidth: float = 1.8
 
-const CarColors: Array = [
-	Color("#d8d8d8"),
-	Color("#f0c040"),
-	Color("#e05828"),
-	Color("#3898d8"),
-	Color("#58c058"),
-	Color("#c858c8"),
+const CarColors: Array[Color] = [
+	Palette.CGrayLight,
+	Palette.CAmber,
+	Palette.CSienna,
+	Palette.CSkyBlue,
+	Palette.CGreenBright,
+	Palette.CPink,
 ]
 
 var _cars: Array = []

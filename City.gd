@@ -11,27 +11,27 @@ const WArterial: float = 8.0
 const WCollector: float = 4.0
 const WLocal: float = 1.5
 
-const CCountryside: Color = Color("#1c4d3f")
-const CStreet: Color = Color("#323238")
+const CCountryside: Color = Palette.CGreenDark
+const CStreet: Color = Palette.CGrayDeep
 
-const CPark: Color = Color("#31832f")
+const CPark: Color = Palette.CGreen
 
-const CRes := [
-	Color("#1e3a70"),
-	Color("#2c6199"),
-	Color("#358fb0"),
-	Color("#55c6c6"),
+const CRes: Array[Color] = [
+	Palette.CBlueDark,
+	Palette.CBlue,
+	Palette.CSkyBlue,
+	Palette.CCyan,
 ]
 
-const CCom := [
-	Color("#eb7e17"),
-	Color("#fab13c"),
+const CCom: Array[Color] = [
+	Palette.COrange,
+	Palette.CAmber,
 ]
 
-const CInd := [
-	Color("#323238"),
-	Color("#68606b"),
-	Color("#9e8b92"),
+const CInd: Array[Color] = [
+	Palette.CGrayDeep,
+	Palette.CGrayDark,
+	Palette.CGrayMid,
 ]
 
 var vertStreetWidths: Array[float] = []
