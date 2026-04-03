@@ -21,10 +21,20 @@ const PhaseEW: int = 1
 const StopOffset: float = CarLength * 2.0
 const BrakingDistance: float = 18.0
 
+const ZoneWeights: Dictionary = {
+    Zone.Park: 2,
+    Zone.Residential: 1,
+    Zone.HighDensityResidential: 10,
+    Zone.Commercial: 15,
+    Zone.OfficeIndustry: 6,
+}
+const GoalHopsMax: int = 150
+
 var _cars: Array = []
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _trafficLights: Dictionary = {}
 var _segmentMap: Dictionary = {}
+var _tilesByZone: Dictionary = {}
 var _time: float = 0.0
 
 
@@ -42,11 +52,13 @@ func init(city: City) -> void:
                 }
     _cars.clear()
     _segmentMap.clear()
+    _buildTilesByZone(city)
     var attempts: int = 0
     while _cars.size() < CarCount and attempts < CarCount * 30:
         attempts += 1
         var car: Dictionary = _spawnCar(city)
         if not car.is_empty():
+            _assignGoal(city, car)
             _cars.append(car)
     _buildSegmentMap()
 
@@ -245,6 +257,9 @@ func _spawnCar(city: City) -> Dictionary:
         "color": CarColors[_rng.randi() % CarColors.size()],
         "leader": null,
         "follower": null,
+        "goalTile": Vector2i(0, 0),
+        "goalIntersection": Vector2i(0, 0),
+        "goalHops": 0,
     }
 
 
@@ -296,13 +311,18 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
     var neighbors: Array = _getExitSegments(
             city, arrivedVertStreet, arrivedHorzStreet,
             car.fromVertStreet, car.fromHorzStreet)
+    car.goalHops += 1
+    if (arrivedVertStreet == car.goalIntersection.x \
+            and arrivedHorzStreet == car.goalIntersection.y) \
+            or car.goalHops > GoalHopsMax:
+        _assignGoal(city, car)
     var nextToVertStreet: int
     var nextToHorzStreet: int
     if neighbors.is_empty():
         nextToVertStreet = car.fromVertStreet
         nextToHorzStreet = car.fromHorzStreet
     else:
-        var chosen: Array = neighbors[_rng.randi() % neighbors.size()]
+        var chosen: Array = _greedyExit(city, neighbors, car.goalIntersection)
         nextToVertStreet = chosen[0]
         nextToHorzStreet = chosen[1]
 
@@ -333,6 +353,79 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
     car.progress = overflow / car.segLength
 
     _insertIntoSegment(car)
+
+
+func _buildTilesByZone(city: City) -> void:
+    _tilesByZone.clear()
+    for row in City.Rows:
+        for col in City.Cols:
+            if city.parcelOwner[row][col] != Vector2i(col, row):
+                continue
+            var zone: int = city.zones[row][col]
+            if not ZoneWeights.has(zone):
+                continue
+            if not _tilesByZone.has(zone):
+                _tilesByZone[zone] = []
+            _tilesByZone[zone].append(Vector2i(col, row))
+
+
+func _pickGoalTile() -> Vector2i:
+    var totalWeight: float = 0.0
+    for zone: int in ZoneWeights:
+        if _tilesByZone.has(zone):
+            totalWeight += ZoneWeights[zone]
+    if totalWeight == 0.0:
+        return Vector2i(0, 0)
+    var roll: float = _rng.randf() * totalWeight
+    var cumulative: float = 0.0
+    var pickedZone: int = ZoneWeights.keys()[0]
+    for zone: int in ZoneWeights:
+        if _tilesByZone.has(zone):
+            cumulative += ZoneWeights[zone]
+            if roll <= cumulative:
+                pickedZone = zone
+                break
+    var tiles: Array = _tilesByZone[pickedZone]
+    return tiles[_rng.randi() % tiles.size()]
+
+
+func _assignGoal(city: City, car: Dictionary) -> void:
+    var tile: Vector2i = _pickGoalTile()
+    car.goalTile = tile
+    var corners: Array[Vector2i] = [
+        Vector2i(tile.x, tile.y),
+        Vector2i(tile.x + 1, tile.y),
+        Vector2i(tile.x, tile.y + 1),
+        Vector2i(tile.x + 1, tile.y + 1),
+    ]
+    var curX: float = _vertStreetCenterX(city, car.toVertStreet)
+    var curY: float = _horzStreetCenterY(city, car.toHorzStreet)
+    var bestDist: float = INF
+    var bestCorner := Vector2i(tile.x, tile.y)
+    for corner: Vector2i in corners:
+        var cx: float = _vertStreetCenterX(city, corner.x)
+        var cy: float = _horzStreetCenterY(city, corner.y)
+        var d: float = (curX - cx) * (curX - cx) + (curY - cy) * (curY - cy)
+        if d < bestDist:
+            bestDist = d
+            bestCorner = corner
+    car.goalIntersection = bestCorner
+    car.goalHops = 0
+
+
+func _greedyExit(city: City, candidates: Array, goalIntersection: Vector2i) -> Array:
+    var goalX: float = _vertStreetCenterX(city, goalIntersection.x)
+    var goalY: float = _horzStreetCenterY(city, goalIntersection.y)
+    var bestDist: float = INF
+    var best: Array = candidates[0]
+    for cand: Array in candidates:
+        var cx: float = _vertStreetCenterX(city, cand[0])
+        var cy: float = _horzStreetCenterY(city, cand[1])
+        var d: float = (cx - goalX) * (cx - goalX) + (cy - goalY) * (cy - goalY)
+        if d < bestDist:
+            bestDist = d
+            best = cand
+    return best
 
 
 func _getExitSegments(city: City, vertStreetIdx: int, horzStreetIdx: int,

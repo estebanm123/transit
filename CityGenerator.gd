@@ -200,11 +200,13 @@ func _buildMap(city: City) -> void:
 							secDist * 5.5 / max(0.01, cbd.fringeR))
 					break
 
+			if zone == Zone.Residential and effectiveDistColor < 2.0:
+				zone = Zone.HighDensityResidential
 			var baseColor: Color
 			match zone:
 				Zone.Park:
 					baseColor = City.CPark
-				Zone.Residential:
+				Zone.Residential, Zone.HighDensityResidential:
 					var idx: int = clamp(int(effectiveDistColor), 0, City.CRes.size() - 1)
 					baseColor = City.CRes[City.CRes.size() - 1 - idx]
 				Zone.Commercial:
@@ -466,6 +468,22 @@ func _genDetails(zone: int, _color: Color, rect: Rect2, dist: float = 0.0,
 						max(1, int(1.0 * tileScale)), max(1, int(3.0 * tileScale))):
 					var bldWidth: float = rng.randf_range(3.5, min(8.0, rect.size.x * 0.28))
 					buildings.append(Rect2(
+						rect.position.x + rng.randf_range(
+								2.0, max(2.0, rect.size.x - bldWidth - 2.0)),
+						rect.position.y + rng.randf_range(
+								2.0, max(2.0, rect.size.y - towerHeight - 2.0)),
+						bldWidth, towerHeight))
+			result["blds"] = buildings
+
+		Zone.HighDensityResidential:
+			var floors: int = rng.randi_range(6, 10)
+			result["density"] = floors
+			var towerHeight: float = min(float(floors) * 2.7 + 1.5, rect.size.y - 4.0)
+			var buildings: Array = []
+			for _i in rng.randi_range(
+					max(1, int(1.0 * tileScale)), max(1, int(3.0 * tileScale))):
+				var bldWidth: float = rng.randf_range(3.5, min(8.0, rect.size.x * 0.28))
+				buildings.append(Rect2(
 						rect.position.x + rng.randf_range(
 								2.0, max(2.0, rect.size.x - bldWidth - 2.0)),
 						rect.position.y + rng.randf_range(

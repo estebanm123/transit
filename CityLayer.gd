@@ -43,7 +43,7 @@ func _drawZoneDetail(zone: int, color: Color, det: Dictionary) -> void:
 				draw_circle(t2["p"], t2["r"], color.darkened(0.30))
 				draw_circle(t2["p"], t2["r"] * 0.55, color.lightened(0.10))
 
-		Zone.Residential:
+		Zone.Residential, Zone.HighDensityResidential:
 			var density: int = det.get("density", 3)
 			for bld: Rect2 in det.get("blds", []):
 				if density == 1:
