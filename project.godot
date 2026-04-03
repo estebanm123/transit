@@ -11,18 +11,18 @@ config_version=5
 [application]
 
 config/name="transit"
+run/main_scene="res://city_map.tscn"
 config/features=PackedStringArray("4.5", "GL Compatibility")
 config/icon="res://icon.svg"
-run/main_scene="res://city_map.tscn"
+
+[audio]
+
+buses/default_bus_layout=""
 
 [display]
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
-
-[audio]
-
-buses/default_bus_layout=""
 
 [rendering]
 
