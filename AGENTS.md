@@ -5,6 +5,7 @@
 - use type annotations when declaring variables
 - no code comments unless the code is very unintuitive
 - descriptive variable names
+- new 
 ## General
 - Godot version is 4.5 - some Godot 3 APIs are not available
 - Do not create uid files, Godot will create them automatically.
