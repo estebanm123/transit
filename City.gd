@@ -1,7 +1,7 @@
 class_name City extends RefCounted
 
-const MapW: int = 1280
-const MapH: int = 720
+const MapW: int = 1500
+const MapH: int = 836
 const Margin: int = 20
 const Cols: int = 100
 const Rows: int = 60

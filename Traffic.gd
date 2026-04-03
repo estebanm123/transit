@@ -16,12 +16,14 @@ const CarColors: Array[Color] = [
 ]
 
 const PhaseDuration: float = 15.0
+const PhaseArterialDuration: float = 25.0
+const PhaseNonArterialDuration: float = 8.0
 const PhaseNS: int = 0
 const PhaseEW: int = 1
 const StopOffset: float = CarLength * 2.0
 const BrakingDistance: float = 18.0
 
-const ArterialSpeedMultiplier: float = 2.0
+const ArterialSpeedMultiplier: float = 4.0
 
 const ZoneWeights: Dictionary = {
     Zone.Park: 2,
@@ -48,9 +50,17 @@ func init(city: City) -> void:
         for h in range(City.Rows + 1):
             if city.vertStreetWidths[v] >= City.WCollector \
                     and city.horzStreetWidths[h] >= City.WCollector:
+                var isVertArterial: bool = city.vertStreetWidths[v] >= City.WArterial
+                var isHorzArterial: bool = city.horzStreetWidths[h] >= City.WArterial
+                var arterialPhase: int = -1
+                if isVertArterial and not isHorzArterial:
+                    arterialPhase = PhaseNS
+                elif isHorzArterial and not isVertArterial:
+                    arterialPhase = PhaseEW
                 _trafficLights[Vector2i(v, h)] = {
                     "phase": _rng.randi() % 2,
                     "lastChanged": -_rng.randf_range(0.0, PhaseDuration),
+                    "arterialPhase": arterialPhase,
                 }
     _cars.clear()
     _segmentMap.clear()
@@ -272,9 +282,16 @@ func _spawnCar(city: City) -> Dictionary:
 func _isRedForCar(car: Dictionary, key: Vector2i) -> bool:
     var light: Dictionary = _trafficLights[key]
     var elapsed: float = _time - light.lastChanged
-    if elapsed >= PhaseDuration:
+    var phaseDuration: float
+    if light.arterialPhase < 0:
+        phaseDuration = PhaseDuration
+    elif light.phase == light.arterialPhase:
+        phaseDuration = PhaseArterialDuration
+    else:
+        phaseDuration = PhaseNonArterialDuration
+    if elapsed >= phaseDuration:
         light.phase = 1 - light.phase
-        light.lastChanged = _time - fmod(elapsed, PhaseDuration)
+        light.lastChanged = _time - fmod(elapsed, phaseDuration)
     var isEW: bool = (car.toHorzStreet == car.fromHorzStreet)
     return (isEW and light.phase == PhaseNS) or (not isEW and light.phase == PhaseEW)
 
