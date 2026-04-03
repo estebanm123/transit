@@ -1,62 +1,19 @@
 class_name CityGenerator extends RefCounted
 
-const MapW: int = 1280
-const MapH: int = 720
-const Margin: int = 20
-const Cols: int = 100
-const Rows: int = 60
-const StreetW: int = 14
-
-enum Zone { Empty, Park, Residential, Commercial, OfficeIndustry }
-
-const WArterial: float = 8.0
-const WCollector: float = 4.0
-const WLocal: float = 1.5
-
-const CCountryside: Color = Color("#1e3312")
-const CStreet: Color = Color("#3b3b40")
-
-const CPark: Color = Color("#548a5c")
-
-const CRes := [
-	Color("#2a4f6e"),
-	Color("#3a6888"),
-	Color("#4e82a4"),
-	Color("#66a0c0"),
-]
-
-const CCom := [
-	Color("#c09030"),
-	Color("#d4a840"),
-]
-
-const CInd := [
-	Color("#585860"),
-	Color("#747478"),
-	Color("#90909a"),
-]
-
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-var colWidths: Array[float] = []
-var rowHeights: Array[float] = []
-var vertStreetWidths: Array[float] = []
-var horzStreetWidths: Array[float] = []
-var _colXPositions: Array[float] = []
-var _rowYPositions: Array[float] = []
-var _origin: Vector2 = Vector2(Margin, Margin)
-
-var zones: Array = []
-var colors: Array = []
-var details: Array = []
-var parcelOwner: Array = []
-var parcelExtent: Array = []
-
 var _numArms: int = 0
 var _armAngles: Array[float] = []
 var _secondaryCbds: Array = []
 
 
-func computeLayout() -> void:
+func generate() -> City:
+	var city := City.new()
+	_computeLayout(city)
+	_buildMap(city)
+	return city
+
+
+func _computeLayout(city: City) -> void:
 	_numArms = rng.randi_range(4, 6)
 	_armAngles.clear()
 	var baseAngle: float = rng.randf() * TAU
@@ -64,93 +21,93 @@ func computeLayout() -> void:
 		_armAngles.append(baseAngle + float(i) * TAU / float(_numArms)
 				+ rng.randf_range(-0.12, 0.12))
 
-	vertStreetWidths.clear()
-	for _i in Cols + 1:
-		vertStreetWidths.append(WLocal)
-	horzStreetWidths.clear()
-	for _i in Rows + 1:
-		horzStreetWidths.append(WLocal)
+	city.vertStreetWidths.clear()
+	for _i in City.Cols + 1:
+		city.vertStreetWidths.append(City.WLocal)
+	city.horzStreetWidths.clear()
+	for _i in City.Rows + 1:
+		city.horzStreetWidths.append(City.WLocal)
 
 	var colSpacing: int = rng.randi_range(7, 11)
 	var rowSpacing: int = rng.randi_range(5, 8)
-	for col in Cols + 1:
+	for col in City.Cols + 1:
 		if col % colSpacing == 0:
-			vertStreetWidths[col] = WCollector
-	for row in Rows + 1:
+			city.vertStreetWidths[col] = City.WCollector
+	for row in City.Rows + 1:
 		if row % rowSpacing == 0:
-			horzStreetWidths[row] = WCollector
+			city.horzStreetWidths[row] = City.WCollector
 
-	var centerColF: float = Cols * 0.5
-	var centerRowF: float = Rows * 0.5
+	var centerColF: float = City.Cols * 0.5
+	var centerRowF: float = City.Rows * 0.5
 	for armAngle: float in _armAngles:
 		var colIdx: int = clamp(
-				int(round(centerColF + cos(armAngle) * centerColF * 0.65)), 1, Cols - 1)
+				int(round(centerColF + cos(armAngle) * centerColF * 0.65)), 1, City.Cols - 1)
 		var rowIdx: int = clamp(
-				int(round(centerRowF + sin(armAngle) * centerRowF * 0.65)), 1, Rows - 1)
-		vertStreetWidths[colIdx] = WArterial
-		horzStreetWidths[rowIdx] = WArterial
+				int(round(centerRowF + sin(armAngle) * centerRowF * 0.65)), 1, City.Rows - 1)
+		city.vertStreetWidths[colIdx] = City.WArterial
+		city.horzStreetWidths[rowIdx] = City.WArterial
 		var innerColIdx: int = clamp(
-				int(round(centerColF + cos(armAngle) * centerColF * 0.28)), 1, Cols - 1)
+				int(round(centerColF + cos(armAngle) * centerColF * 0.28)), 1, City.Cols - 1)
 		var innerRowIdx: int = clamp(
-				int(round(centerRowF + sin(armAngle) * centerRowF * 0.28)), 1, Rows - 1)
-		if vertStreetWidths[innerColIdx] < WArterial:
-			vertStreetWidths[innerColIdx] = WCollector
-		if horzStreetWidths[innerRowIdx] < WArterial:
-			horzStreetWidths[innerRowIdx] = WCollector
+				int(round(centerRowF + sin(armAngle) * centerRowF * 0.28)), 1, City.Rows - 1)
+		if city.vertStreetWidths[innerColIdx] < City.WArterial:
+			city.vertStreetWidths[innerColIdx] = City.WCollector
+		if city.horzStreetWidths[innerRowIdx] < City.WArterial:
+			city.horzStreetWidths[innerRowIdx] = City.WCollector
 
 	var totalStreetWidth: float = 0.0
-	for streetWidth in vertStreetWidths:
+	for streetWidth in city.vertStreetWidths:
 		totalStreetWidth += streetWidth
 	var totalStreetHeight: float = 0.0
-	for streetHeight in horzStreetWidths:
+	for streetHeight in city.horzStreetWidths:
 		totalStreetHeight += streetHeight
 
-	var availWidth: float = MapW - Margin * 2 - totalStreetWidth
-	var availHeight: float = MapH - Margin * 2 - totalStreetHeight
+	var availWidth: float = City.MapW - City.Margin * 2 - totalStreetWidth
+	var availHeight: float = City.MapH - City.Margin * 2 - totalStreetHeight
 
 	var colWeights: Array[float] = []
 	var colWeightSum: float = 0.0
-	for _i in Cols:
+	for _i in City.Cols:
 		var weight: float = rng.randf_range(0.7, 1.4)
 		colWeights.append(weight)
 		colWeightSum += weight
-	colWidths.clear()
+	city._colWidths.clear()
 	for weight in colWeights:
-		colWidths.append(availWidth * weight / colWeightSum)
+		city._colWidths.append(availWidth * weight / colWeightSum)
 
 	var rowWeights: Array[float] = []
 	var rowWeightSum: float = 0.0
-	for _i in Rows:
+	for _i in City.Rows:
 		var weight: float = rng.randf_range(0.7, 1.4)
 		rowWeights.append(weight)
 		rowWeightSum += weight
-	rowHeights.clear()
+	city._rowHeights.clear()
 	for weight in rowWeights:
-		rowHeights.append(availHeight * weight / rowWeightSum)
+		city._rowHeights.append(availHeight * weight / rowWeightSum)
 
-	_colXPositions.clear()
-	var curX: float = _origin.x + vertStreetWidths[0]
-	for col in Cols:
-		_colXPositions.append(curX)
-		curX += colWidths[col] + vertStreetWidths[col + 1]
+	city._colXPositions.clear()
+	var curX: float = City.Margin + city.vertStreetWidths[0]
+	for col in City.Cols:
+		city._colXPositions.append(curX)
+		curX += city._colWidths[col] + city.vertStreetWidths[col + 1]
 
-	_rowYPositions.clear()
-	var curY: float = _origin.y + horzStreetWidths[0]
-	for row in Rows:
-		_rowYPositions.append(curY)
-		curY += rowHeights[row] + horzStreetWidths[row + 1]
+	city._rowYPositions.clear()
+	var curY: float = City.Margin + city.horzStreetWidths[0]
+	for row in City.Rows:
+		city._rowYPositions.append(curY)
+		curY += city._rowHeights[row] + city.horzStreetWidths[row + 1]
 
-	_generateSecondaryCbds()
+	_generateSecondaryCbds(city)
 
 
-func buildMap() -> void:
-	var centerCol: float = (Cols - 1) / 2.0
-	var centerRow: float = (Rows - 1) / 2.0
-	zones = []
-	colors = []
-	details = []
-	parcelOwner = []
-	parcelExtent = []
+func _buildMap(city: City) -> void:
+	var centerCol: float = (City.Cols - 1) / 2.0
+	var centerRow: float = (City.Rows - 1) / 2.0
+	city.zones = []
+	city.colors = []
+	city.details = []
+	city.parcelOwner = []
+	city.parcelExtent = []
 
 	var cityParkRatio: float = rng.randf_range(0.0, 0.043)
 	var cityIndRatio: float = rng.randf_range(0.0, 0.04)
@@ -159,32 +116,33 @@ func buildMap() -> void:
 	var cbdOfficeRatio: float = rng.randf_range(0.015, 0.15)
 	var cbdResRatio: float = rng.randf_range(0.0, 0.80)
 
-	for row in Rows:
+	for row in City.Rows:
 		var zoneRow: Array = []
 		var colorRow: Array = []
 		var ownerRow: Array = []
 		var extentRow: Array = []
-		for col in Cols:
+		for col in City.Cols:
 			zoneRow.append(null)
 			colorRow.append(Color.WHITE)
 			ownerRow.append(Vector2i(col, row))
 			extentRow.append(Vector2i(col, row))
-		zones.append(zoneRow)
-		colors.append(colorRow)
-		parcelOwner.append(ownerRow)
-		parcelExtent.append(extentRow)
+		city.zones.append(zoneRow)
+		city.colors.append(colorRow)
+		city.parcelOwner.append(ownerRow)
+		city.parcelExtent.append(extentRow)
 
-	for row in Rows:
-		for col in Cols:
-			if zones[row][col] != null:
+	for row in City.Rows:
+		for col in City.Cols:
+			if city.zones[row][col] != null:
 				continue
 
 			var dx: float = col - centerCol
 			var dy: float = row - centerRow
 			var dist: float = sqrt(dx * dx + dy * dy)
-			var corner: bool = (col == 0 or col == Cols - 1) and (row == 0 or row == Rows - 1)
+			var corner: bool = (col == 0 or col == City.Cols - 1) \
+					and (row == 0 or row == City.Rows - 1)
 
-			var zone: Zone
+			var zone: int
 			if not _isInsideCity(col, row):
 				zone = Zone.Empty
 			elif dist < comCore:
@@ -211,7 +169,7 @@ func buildMap() -> void:
 					var indChance: float = cityIndRatio
 					for neighbor: Vector2i in [Vector2i(col - 1, row), Vector2i(col, row - 1)]:
 						if neighbor.x >= 0 and neighbor.y >= 0 \
-								and zones[neighbor.y][neighbor.x] == Zone.OfficeIndustry:
+								and city.zones[neighbor.y][neighbor.x] == Zone.OfficeIndustry:
 							indChance = min(0.9, indChance * 5.0)
 							break
 					if rng.randf() < indChance:
@@ -245,41 +203,42 @@ func buildMap() -> void:
 			var baseColor: Color
 			match zone:
 				Zone.Park:
-					baseColor = CPark
+					baseColor = City.CPark
 				Zone.Residential:
-					var idx: int = clamp(int(effectiveDistColor), 0, CRes.size() - 1)
-					baseColor = CRes[CRes.size() - 1 - idx]
+					var idx: int = clamp(int(effectiveDistColor), 0, City.CRes.size() - 1)
+					baseColor = City.CRes[City.CRes.size() - 1 - idx]
 				Zone.Commercial:
-					baseColor = CCom[rng.randi() % CCom.size()]
+					baseColor = City.CCom[rng.randi() % City.CCom.size()]
 				Zone.OfficeIndustry:
-					baseColor = CInd[rng.randi() % CInd.size()]
+					baseColor = City.CInd[rng.randi() % City.CInd.size()]
 				_:
 					baseColor = Color.WHITE
 
-			zones[row][col] = zone
-			colors[row][col] = baseColor
+			city.zones[row][col] = zone
+			city.colors[row][col] = baseColor
 
 			if (zone == Zone.Park or zone == Zone.OfficeIndustry) \
 					and rng.randf() <= (0.95 if zone == Zone.Park else 0.80):
 				var mergeLimit: int = 7 if zone == Zone.Park else 1
 				var maxCol: int = col
-				while maxCol + 1 < Cols and maxCol - col < mergeLimit:
+				while maxCol + 1 < City.Cols and maxCol - col < mergeLimit:
 					var nextCol: int = maxCol + 1
-					if zones[row][nextCol] != null:
+					if city.zones[row][nextCol] != null:
 						break
 					var ndx: float = nextCol - centerCol
 					var ndy: float = row - centerRow
 					var dist2: float = sqrt(ndx * ndx + ndy * ndy)
-					if not _isInsideCity(nextCol, row) or (zone == Zone.Park and dist2 < comCore):
+					if not _isInsideCity(nextCol, row) \
+							or (zone == Zone.Park and dist2 < comCore):
 						break
 					if zone == Zone.Park and rng.randf() < (maxCol - col + 1) * 0.15:
 						break
 					maxCol += 1
 				var maxRow: int = row
-				while maxRow + 1 < Rows and maxRow - row < mergeLimit:
+				while maxRow + 1 < City.Rows and maxRow - row < mergeLimit:
 					var ok: bool = true
 					for c2 in range(col, maxCol + 1):
-						if zones[maxRow + 1][c2] != null:
+						if city.zones[maxRow + 1][c2] != null:
 							ok = false
 							break
 						var ndx: float = c2 - centerCol
@@ -297,21 +256,21 @@ func buildMap() -> void:
 				if maxCol > col or maxRow > row:
 					for r in range(row, maxRow + 1):
 						for c2 in range(col, maxCol + 1):
-							zones[r][c2] = zone
-							colors[r][c2] = baseColor
-							parcelOwner[r][c2] = Vector2i(col, row)
-					parcelExtent[row][col] = Vector2i(maxCol, maxRow)
+							city.zones[r][c2] = zone
+							city.colors[r][c2] = baseColor
+							city.parcelOwner[r][c2] = Vector2i(col, row)
+					city.parcelExtent[row][col] = Vector2i(maxCol, maxRow)
 
-	for row in Rows:
+	for row in City.Rows:
 		var detailRow: Array = []
-		for col in Cols:
-			if parcelOwner[row][col] != Vector2i(col, row):
+		for col in City.Cols:
+			if city.parcelOwner[row][col] != Vector2i(col, row):
 				detailRow.append({})
 				continue
 			var dx: float = col - centerCol
 			var dy: float = row - centerRow
 			var dist: float = sqrt(dx * dx + dy * dy)
-			var zone: Zone = zones[row][col]
+			var zone: int = city.zones[row][col]
 			var isOffice: bool = (zone == Zone.OfficeIndustry and dist < comCore)
 			var nearCommercial: bool = false
 			if zone == Zone.Residential:
@@ -320,9 +279,9 @@ func buildMap() -> void:
 					Vector2i(col, row - 1), Vector2i(col, row + 1),
 				]
 				for neighbor: Vector2i in neighbors:
-					if neighbor.x >= 0 and neighbor.x < Cols \
-							and neighbor.y >= 0 and neighbor.y < Rows \
-							and zones[neighbor.y][neighbor.x] == Zone.Commercial:
+					if neighbor.x >= 0 and neighbor.x < City.Cols \
+							and neighbor.y >= 0 and neighbor.y < City.Rows \
+							and city.zones[neighbor.y][neighbor.x] == Zone.Commercial:
 						nearCommercial = true
 						break
 			var effectiveDist: float = dist
@@ -335,22 +294,9 @@ func buildMap() -> void:
 						isOffice = true
 					break
 			detailRow.append(_genDetails(
-					zone, colors[row][col], mergedBlockRect(col, row),
+					zone, city.colors[row][col], city.mergedBlockRect(col, row),
 					effectiveDist, isOffice, nearCommercial))
-		details.append(detailRow)
-
-
-func blockRect(col: int, row: int) -> Rect2:
-	return Rect2(_colXPositions[col], _rowYPositions[row], colWidths[col], rowHeights[row])
-
-
-func mergedBlockRect(col: int, row: int) -> Rect2:
-	var extent: Vector2i = parcelExtent[row][col]
-	var x: float = _colXPositions[col]
-	var y: float = _rowYPositions[row]
-	var w: float = _colXPositions[extent.x] + colWidths[extent.x] - x
-	var h: float = _rowYPositions[extent.y] + rowHeights[extent.y] - y
-	return Rect2(x, y, w, h)
+		city.details.append(detailRow)
 
 
 func _secondaryCbdDist(col: int, row: int, cbd: Dictionary) -> float:
@@ -365,23 +311,23 @@ func _secondaryCbdDist(col: int, row: int, cbd: Dictionary) -> float:
 	return sqrt(dAlong * dAlong + perp * perp)
 
 
-func _generateSecondaryCbds() -> void:
+func _generateSecondaryCbds(city: City) -> void:
 	_secondaryCbds.clear()
 	var count: int = rng.randi_range(0, 5)
 	if count == 0:
 		return
 	var arterialCols: Array[int] = []
 	var arterialRows: Array[int] = []
-	for c in range(1, Cols):
-		if vertStreetWidths[c] >= WArterial:
+	for c in range(1, City.Cols):
+		if city.vertStreetWidths[c] >= City.WArterial:
 			arterialCols.append(c)
-	for r in range(1, Rows):
-		if horzStreetWidths[r] >= WArterial:
+	for r in range(1, City.Rows):
+		if city.horzStreetWidths[r] >= City.WArterial:
 			arterialRows.append(r)
 	if arterialCols.is_empty() and arterialRows.is_empty():
 		return
-	var centerCol: float = (Cols - 1) / 2.0
-	var centerRow: float = (Rows - 1) / 2.0
+	var centerCol: float = (City.Cols - 1) / 2.0
+	var centerRow: float = (City.Rows - 1) / 2.0
 	var placed: Array = []
 	var attempts: int = 0
 	while placed.size() < count and attempts < 60:
@@ -395,11 +341,11 @@ func _generateSecondaryCbds() -> void:
 					(arterialCols.is_empty() or rng.randf() < 0.5)
 			if useRow:
 				var rowIdx: int = arterialRows[rng.randi() % arterialRows.size()]
-				center = Vector2(rng.randf_range(8.0, Cols - 9.0), rowIdx - 0.5)
+				center = Vector2(rng.randf_range(8.0, City.Cols - 9.0), rowIdx - 0.5)
 				angle = 0.0
 			else:
 				var colIdx: int = arterialCols[rng.randi() % arterialCols.size()]
-				center = Vector2(colIdx - 0.5, rng.randf_range(6.0, Rows - 7.0))
+				center = Vector2(colIdx - 0.5, rng.randf_range(6.0, City.Rows - 7.0))
 				angle = PI * 0.5
 			halfLen = rng.randf_range(3.0, 9.0)
 		else:
@@ -412,10 +358,10 @@ func _generateSecondaryCbds() -> void:
 			elif not arterialCols.is_empty():
 				var colIdx: int = arterialCols[rng.randi() % arterialCols.size()]
 				center = Vector2(colIdx - 0.5 + rng.randf_range(-1.5, 1.5),
-						rng.randf_range(5.0, Rows - 6.0))
+						rng.randf_range(5.0, City.Rows - 6.0))
 			else:
 				var rowIdx: int = arterialRows[rng.randi() % arterialRows.size()]
-				center = Vector2(rng.randf_range(5.0, Cols - 6.0),
+				center = Vector2(rng.randf_range(5.0, City.Cols - 6.0),
 						rowIdx - 0.5 + rng.randf_range(-1.5, 1.5))
 		if center.distance_to(Vector2(centerCol, centerRow)) < 10.0:
 			continue
@@ -426,8 +372,8 @@ func _generateSecondaryCbds() -> void:
 				break
 		if tooClose:
 			continue
-		var cbdCol: int = clamp(int(round(center.x)), 0, Cols - 1)
-		var cbdRow: int = clamp(int(round(center.y)), 0, Rows - 1)
+		var cbdCol: int = clamp(int(round(center.x)), 0, City.Cols - 1)
+		var cbdRow: int = clamp(int(round(center.y)), 0, City.Rows - 1)
 		if not _isInsideCity(cbdCol, cbdRow):
 			continue
 		var coreRadius: float = rng.randf_range(1.5, 3.5)
@@ -446,10 +392,10 @@ func _generateSecondaryCbds() -> void:
 
 
 func _isInsideCity(col: int, row: int) -> bool:
-	var centerCol: float = (Cols - 1) / 2.0
-	var centerRow: float = (Rows - 1) / 2.0
-	var dx: float = (col - centerCol) / (Cols / 2.0)
-	var dy: float = (row - centerRow) / (Rows / 2.0)
+	var centerCol: float = (City.Cols - 1) / 2.0
+	var centerRow: float = (City.Rows - 1) / 2.0
+	var dx: float = (col - centerCol) / (City.Cols / 2.0)
+	var dy: float = (row - centerRow) / (City.Rows / 2.0)
 	var normalizedDist: float = sqrt(dx * dx + dy * dy)
 	if normalizedDist < 0.55:
 		return true
@@ -463,7 +409,7 @@ func _isInsideCity(col: int, row: int) -> bool:
 	return false
 
 
-func _genDetails(zone: Zone, _color: Color, rect: Rect2, dist: float = 0.0,
+func _genDetails(zone: int, _color: Color, rect: Rect2, dist: float = 0.0,
 		isOffice: bool = false, nearCommercial: bool = false) -> Dictionary:
 	var tileScale: float = sqrt(rect.get_area()) / 7.5
 	var result: Dictionary = {}

@@ -4,6 +4,7 @@ const ZoomMin: float = 0.15
 const ZoomMax: float = 5.0
 
 var _generator: CityGenerator
+var _city: City
 var _zoom: float = 1.0
 var _pan: Vector2 = Vector2.ZERO
 var _dragging: bool = false
@@ -16,8 +17,7 @@ func _ready() -> void:
     _generator = CityGenerator.new()
     _generator.rng.seed = 42
     _font = ThemeDB.fallback_font
-    _generator.computeLayout()
-    _generator.buildMap()
+    _city = _generator.generate()
     queue_redraw()
 
 
@@ -40,8 +40,7 @@ func _input(event: InputEvent) -> void:
         queue_redraw()
     elif event is InputEventKey and event.pressed and event.keycode == KEY_R:
         _generator.rng.seed = _generator.rng.randi()
-        _generator.computeLayout()
-        _generator.buildMap()
+        _city = _generator.generate()
         queue_redraw()
 
 
@@ -60,42 +59,42 @@ func _draw() -> void:
 
     draw_set_transform(_pan, 0.0, Vector2(_zoom, _zoom))
 
-    draw_rect(Rect2(0, 0, CityGenerator.MapW, CityGenerator.MapH), CityGenerator.CCountryside)
+    draw_rect(Rect2(0, 0, City.MapW, City.MapH), City.CCountryside)
 
-    for row in CityGenerator.Rows:
-        for col in CityGenerator.Cols:
-            var zone: CityGenerator.Zone = _generator.zones[row][col]
-            if zone == CityGenerator.Zone.Empty:
+    for row in City.Rows:
+        for col in City.Cols:
+            var zone: int = _city.zones[row][col]
+            if zone == Zone.Empty:
                 continue
-            if _generator.parcelOwner[row][col] != Vector2i(col, row):
+            if _city.parcelOwner[row][col] != Vector2i(col, row):
                 continue
-            var extent: Vector2i = _generator.parcelExtent[row][col]
-            var rect: Rect2 = _generator.mergedBlockRect(col, row)
-            var streetLeft: float = _generator.vertStreetWidths[col]
-            var streetRight: float = _generator.vertStreetWidths[extent.x + 1]
-            var streetTop: float = _generator.horzStreetWidths[row]
-            var streetBottom: float = _generator.horzStreetWidths[extent.y + 1]
+            var extent: Vector2i = _city.parcelExtent[row][col]
+            var rect: Rect2 = _city.mergedBlockRect(col, row)
+            var streetLeft: float = _city.vertStreetWidths[col]
+            var streetRight: float = _city.vertStreetWidths[extent.x + 1]
+            var streetTop: float = _city.horzStreetWidths[row]
+            var streetBottom: float = _city.horzStreetWidths[extent.y + 1]
             draw_rect(Rect2(rect.position.x - streetLeft, rect.position.y - streetTop,
                     rect.size.x + streetLeft + streetRight,
-                    rect.size.y + streetTop + streetBottom), CityGenerator.CStreet)
-            var color: Color = _generator.colors[row][col]
+                    rect.size.y + streetTop + streetBottom), City.CStreet)
+            var color: Color = _city.colors[row][col]
             draw_rect(rect, color)
-            _drawZoneDetail(zone, color, _generator.details[row][col])
+            _drawZoneDetail(zone, color, _city.details[row][col])
 
     draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
     _drawLegend()
 
 
-func _drawZoneDetail(zone: CityGenerator.Zone, color: Color, det: Dictionary) -> void:
+func _drawZoneDetail(zone: int, color: Color, det: Dictionary) -> void:
     match zone:
-        CityGenerator.Zone.Park:
+        Zone.Park:
             for p: Rect2 in det.get("paths", []):
                 draw_rect(p, color.darkened(0.20))
             for t2 in det.get("trees", []):
                 draw_circle(t2["p"], t2["r"], color.darkened(0.30))
                 draw_circle(t2["p"], t2["r"] * 0.55, color.lightened(0.10))
 
-        CityGenerator.Zone.Residential:
+        Zone.Residential:
             var density: int = det.get("density", 3)
             for bld: Rect2 in det.get("blds", []):
                 if density == 1:
@@ -125,11 +124,11 @@ func _drawZoneDetail(zone: CityGenerator.Zone, color: Color, det: Dictionary) ->
                             draw_rect(Rect2(winX, floorY, 3.5, windowHeight), windowColor)
                             winX += 6.0
 
-        CityGenerator.Zone.Commercial:
+        Zone.Commercial:
             for bld: Rect2 in det.get("blds", []):
                 draw_rect(bld, color.darkened(0.44))
 
-        CityGenerator.Zone.OfficeIndustry:
+        Zone.OfficeIndustry:
             for bld: Rect2 in det.get("blds", []):
                 draw_rect(bld, color.darkened(0.30))
 
@@ -143,10 +142,10 @@ func _drawLegend() -> void:
     const FontSize: int = 14
 
     var items: Array = [
-        {"c": CityGenerator.CPark,   "lbl": "Park"},
-        {"c": CityGenerator.CRes[2], "lbl": "Residential"},
-        {"c": CityGenerator.CCom[0], "lbl": "Commercial"},
-        {"c": CityGenerator.CInd[1], "lbl": "Office/Industry"},
+        {"c": City.CPark,   "lbl": "Park"},
+        {"c": City.CRes[2], "lbl": "Residential"},
+        {"c": City.CCom[0], "lbl": "Commercial"},
+        {"c": City.CInd[1], "lbl": "Office/Industry"},
     ]
 
     var vpSize: Vector2 = get_viewport_rect().size
