@@ -1,6 +1,6 @@
 class_name Traffic extends RefCounted
 
-const CarCount: int = 200
+const CarCount: int = 1600
 const CarSpeedMin: float = 4.25
 const CarSpeedMax: float = 9.35
 const CarLength: float = 2.8
