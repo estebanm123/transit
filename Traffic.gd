@@ -34,12 +34,51 @@ const ZoneWeights: Dictionary = {
 }
 const GoalHopsMax: int = 150
 
-var _cars: Array = []
+const HISTORY_SIZE: int = 8
+const HISTORY_HALF: int = 4
+
+
+class Car extends RefCounted:
+    var fromVertStreet: int = 0
+    var fromHorzStreet: int = 0
+    var toVertStreet: int = 0
+    var toHorzStreet: int = 0
+    var progress: float = 0.0
+    var baseSpeed: float = 0.0
+    var desiredSpeed: float = 0.0
+    var currentSpeed: float = 0.0
+    var segLength: float = 0.0
+    var forward: Vector2 = Vector2.ZERO
+    var laneOffset: Vector2 = Vector2.ZERO
+    var color: Color
+    var colorIndex: int = 0
+    var leader = null
+    var follower = null
+    var goalTile: Vector2i = Vector2i.ZERO
+    var goalIntersection: Vector2i = Vector2i.ZERO
+    var goalHops: int = 0
+    var historyBuf: Array = [
+        Vector4i(), Vector4i(), Vector4i(), Vector4i(),
+        Vector4i(), Vector4i(), Vector4i(), Vector4i(),
+    ]
+    var historyHead: int = 0
+    var historyCount: int = 0
+
+
+var _cars: Array[Car] = []
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _trafficLights: Dictionary = {}
 var _segmentMap: Dictionary = {}
 var _tilesByZone: Dictionary = {}
 var _time: float = 0.0
+
+var _vertStreetX: PackedFloat32Array
+var _horzStreetY: PackedFloat32Array
+var _horzUsable: PackedByteArray
+var _vertUsable: PackedByteArray
+var _goalTotalWeight: float = 0.0
+var _goalCumWeights: Array[float] = []
+var _goalZones: Array[int] = []
 
 
 func init(city: City) -> void:
@@ -65,13 +104,16 @@ func init(city: City) -> void:
     _cars.clear()
     _segmentMap.clear()
     _buildTilesByZone(city)
+    _buildPositionCache(city)
+    _buildUsabilityCache(city)
     var attempts: int = 0
     while _cars.size() < CarCount and attempts < CarCount * 30:
         attempts += 1
-        var car: Dictionary = _spawnCar(city)
-        if not car.is_empty():
+        var car: Car = _spawnCar(city)
+        if car != null:
             _assignGoal(city, car)
             _cars.append(car)
+    _cars.sort_custom(func(a: Car, b: Car) -> bool: return a.colorIndex < b.colorIndex)
     _buildSegmentMap()
 
 
@@ -79,6 +121,38 @@ func tick(city: City, delta: float) -> void:
     _time += delta
     for car in _cars:
         _advanceCar(city, car, delta)
+
+
+func _buildPositionCache(city: City) -> void:
+    _vertStreetX.resize(City.Cols + 1)
+    for v in range(City.Cols + 1):
+        _vertStreetX[v] = _vertStreetCenterX(city, v)
+    _horzStreetY.resize(City.Rows + 1)
+    for h in range(City.Rows + 1):
+        _horzStreetY[h] = _horzStreetCenterY(city, h)
+
+
+func _buildUsabilityCache(city: City) -> void:
+    _horzUsable.resize((City.Rows + 1) * City.Cols)
+    for h in range(City.Rows + 1):
+        for v in range(City.Cols):
+            _horzUsable[h * City.Cols + v] = 1 if _horzSegmentUsable(city, v, h) else 0
+    _vertUsable.resize((City.Cols + 1) * City.Rows)
+    for v in range(City.Cols + 1):
+        for h in range(City.Rows):
+            _vertUsable[v * City.Rows + h] = 1 if _vertSegmentUsable(city, v, h) else 0
+
+
+func _horzUsableAt(v: int, h: int) -> bool:
+    if v < 0 or v >= City.Cols or h < 0 or h > City.Rows:
+        return false
+    return _horzUsable[h * City.Cols + v] != 0
+
+
+func _vertUsableAt(v: int, h: int) -> bool:
+    if v < 0 or v > City.Cols or h < 0 or h >= City.Rows:
+        return false
+    return _vertUsable[v * City.Rows + h] != 0
 
 
 func _buildSegmentMap() -> void:
@@ -95,17 +169,17 @@ func _buildSegmentMap() -> void:
         groups[key].append(car)
     for key in groups:
         var group: Array = groups[key]
-        group.sort_custom(func(a, b): return a.progress < b.progress)
+        group.sort_custom(func(a: Car, b: Car) -> bool: return a.progress < b.progress)
         _segmentMap[key] = group[0]
         for i in range(group.size() - 1):
             group[i].leader = group[i + 1]
             group[i + 1].follower = group[i]
 
 
-func _insertIntoSegment(car: Dictionary) -> void:
+func _insertIntoSegment(car: Car) -> void:
     var key := Vector4i(car.fromVertStreet, car.fromHorzStreet,
             car.toVertStreet, car.toHorzStreet)
-    var head = _segmentMap.get(key, null)
+    var head: Car = _segmentMap.get(key, null)
     if head == null or car.progress <= head.progress:
         car.leader = head
         car.follower = null
@@ -113,7 +187,7 @@ func _insertIntoSegment(car: Dictionary) -> void:
             head.follower = car
         _segmentMap[key] = car
         return
-    var prev = head
+    var prev: Car = head
     while prev.leader != null and prev.leader.progress <= car.progress:
         prev = prev.leader
     car.follower = prev
@@ -123,7 +197,7 @@ func _insertIntoSegment(car: Dictionary) -> void:
     prev.leader = car
 
 
-func _removeFromSegment(car: Dictionary) -> void:
+func _removeFromSegment(car: Car) -> void:
     if car.follower != null:
         car.follower.leader = car.leader
     else:
@@ -139,26 +213,22 @@ func _removeFromSegment(car: Dictionary) -> void:
     car.follower = null
 
 
-func drawCars(canvas: Node2D, city: City) -> void:
+func drawCars(canvas: Node2D) -> void:
+    const HALF_LEN: float = CarLength * 0.5
+    const HALF_WID: float = CarWidth * 0.5
     for car in _cars:
-        var segStart := Vector2(
-                _vertStreetCenterX(city, car.fromVertStreet),
-                _horzStreetCenterY(city, car.fromHorzStreet))
-        var segEnd := Vector2(
-                _vertStreetCenterX(city, car.toVertStreet),
-                _horzStreetCenterY(city, car.toHorzStreet))
-        var center: Vector2 = segStart.lerp(segEnd, car.progress) + car.laneOffset
-        var forward: Vector2 = car.forward
-        var sideways: Vector2 = Vector2(-forward.y, forward.x)
-        canvas.draw_colored_polygon(PackedVector2Array([
-            center + forward * (CarLength * 0.5) + sideways * (CarWidth * 0.5),
-            center + forward * (CarLength * 0.5) - sideways * (CarWidth * 0.5),
-            center - forward * (CarLength * 0.5) - sideways * (CarWidth * 0.5),
-            center - forward * (CarLength * 0.5) + sideways * (CarWidth * 0.5),
-        ]), car.color)
+        var cx: float = lerpf(_vertStreetX[car.fromVertStreet], _vertStreetX[car.toVertStreet],
+                car.progress) + car.laneOffset.x
+        var cy: float = lerpf(_horzStreetY[car.fromHorzStreet], _horzStreetY[car.toHorzStreet],
+                car.progress) + car.laneOffset.y
+        var rect: Rect2
+        if car.forward.x != 0.0:
+            rect = Rect2(cx - HALF_LEN, cy - HALF_WID, CarLength, CarWidth)
+        else:
+            rect = Rect2(cx - HALF_WID, cy - HALF_LEN, CarWidth, CarLength)
+        canvas.draw_rect(rect, car.color)
 
 
-# X position of the center of vertical street vertStreetIdx (0..Cols).
 func _vertStreetCenterX(city: City, vertStreetIdx: int) -> float:
     if vertStreetIdx < City.Cols:
         return city._colXPositions[vertStreetIdx] - city.vertStreetWidths[vertStreetIdx] * 0.5
@@ -166,7 +236,6 @@ func _vertStreetCenterX(city: City, vertStreetIdx: int) -> float:
             + city.vertStreetWidths[City.Cols] * 0.5
 
 
-# Y position of the center of horizontal street horzStreetIdx (0..Rows).
 func _horzStreetCenterY(city: City, horzStreetIdx: int) -> float:
     if horzStreetIdx < City.Rows:
         return city._rowYPositions[horzStreetIdx] - city.horzStreetWidths[horzStreetIdx] * 0.5
@@ -174,8 +243,6 @@ func _horzStreetCenterY(city: City, horzStreetIdx: int) -> float:
             + city.horzStreetWidths[City.Rows] * 0.5
 
 
-# Is the horizontal segment from intersection (vertStreetIdx, horzStreetIdx)
-# to (vertStreetIdx+1, horzStreetIdx) passable?
 func _horzSegmentUsable(city: City, vertStreetIdx: int, horzStreetIdx: int) -> bool:
     if vertStreetIdx < 0 or vertStreetIdx >= City.Cols \
             or horzStreetIdx < 0 or horzStreetIdx > City.Rows:
@@ -194,8 +261,6 @@ func _horzSegmentUsable(city: City, vertStreetIdx: int, horzStreetIdx: int) -> b
             != city.parcelOwner[horzStreetIdx][vertStreetIdx]
 
 
-# Is the vertical segment from intersection (vertStreetIdx, horzStreetIdx)
-# to (vertStreetIdx, horzStreetIdx+1) passable?
 func _vertSegmentUsable(city: City, vertStreetIdx: int, horzStreetIdx: int) -> bool:
     if vertStreetIdx < 0 or vertStreetIdx > City.Cols \
             or horzStreetIdx < 0 or horzStreetIdx >= City.Rows:
@@ -218,7 +283,7 @@ func _calcLaneOffset(forward: Vector2, streetWidth: float) -> Vector2:
     return Vector2(-forward.y, forward.x) * streetWidth * 0.22
 
 
-func _spawnCar(city: City) -> Dictionary:
+func _spawnCar(city: City) -> Car:
     var isHorizontalSegment: bool = _rng.randf() < 0.5
     var fromVertStreet: int
     var fromHorzStreet: int
@@ -228,58 +293,49 @@ func _spawnCar(city: City) -> Dictionary:
     if isHorizontalSegment:
         fromVertStreet = _rng.randi_range(0, City.Cols - 1)
         fromHorzStreet = _rng.randi_range(0, City.Rows)
-        if not _horzSegmentUsable(city, fromVertStreet, fromHorzStreet):
-            return {}
+        if not _horzUsableAt(fromVertStreet, fromHorzStreet):
+            return null
         toVertStreet = fromVertStreet + 1
         toHorzStreet = fromHorzStreet
     else:
         fromVertStreet = _rng.randi_range(0, City.Cols)
         fromHorzStreet = _rng.randi_range(0, City.Rows - 1)
-        if not _vertSegmentUsable(city, fromVertStreet, fromHorzStreet):
-            return {}
+        if not _vertUsableAt(fromVertStreet, fromHorzStreet):
+            return null
         toVertStreet = fromVertStreet
         toHorzStreet = fromHorzStreet + 1
 
-    var segStart := Vector2(
-            _vertStreetCenterX(city, fromVertStreet),
-            _horzStreetCenterY(city, fromHorzStreet))
-    var segEnd := Vector2(
-            _vertStreetCenterX(city, toVertStreet),
-            _horzStreetCenterY(city, toHorzStreet))
+    var segStart := Vector2(_vertStreetX[fromVertStreet], _horzStreetY[fromHorzStreet])
+    var segEnd := Vector2(_vertStreetX[toVertStreet], _horzStreetY[toHorzStreet])
     var segLength: float = segStart.distance_to(segEnd)
     if segLength < 0.5:
-        return {}
+        return null
 
     var forward: Vector2 = (segEnd - segStart) / segLength
     var streetWidth: float = city.horzStreetWidths[fromHorzStreet] \
             if isHorizontalSegment else city.vertStreetWidths[fromVertStreet]
     var baseSpeed: float = _rng.randf_range(CarSpeedMin, CarSpeedMax)
     var speedMult: float = ArterialSpeedMultiplier if streetWidth >= City.WArterial else 1.0
-    var desiredSpeed: float = baseSpeed * speedMult
+    var colorIdx: int = _rng.randi() % CarColors.size()
 
-    return {
-        "fromVertStreet": fromVertStreet,
-        "fromHorzStreet": fromHorzStreet,
-        "toVertStreet": toVertStreet,
-        "toHorzStreet": toHorzStreet,
-        "progress": _rng.randf(),
-        "baseSpeed": baseSpeed,
-        "desiredSpeed": desiredSpeed,
-        "currentSpeed": desiredSpeed,
-        "segLength": segLength,
-        "forward": forward,
-        "laneOffset": _calcLaneOffset(forward, streetWidth),
-        "color": CarColors[_rng.randi() % CarColors.size()],
-        "leader": null,
-        "follower": null,
-        "goalTile": Vector2i(0, 0),
-        "goalIntersection": Vector2i(0, 0),
-        "goalHops": 0,
-        "segmentHistory": [],
-    }
+    var car := Car.new()
+    car.fromVertStreet = fromVertStreet
+    car.fromHorzStreet = fromHorzStreet
+    car.toVertStreet = toVertStreet
+    car.toHorzStreet = toHorzStreet
+    car.progress = _rng.randf()
+    car.baseSpeed = baseSpeed
+    car.desiredSpeed = baseSpeed * speedMult
+    car.currentSpeed = car.desiredSpeed
+    car.segLength = segLength
+    car.forward = forward
+    car.laneOffset = _calcLaneOffset(forward, streetWidth)
+    car.color = CarColors[colorIdx]
+    car.colorIndex = colorIdx
+    return car
 
 
-func _isRedForCar(car: Dictionary, key: Vector2i) -> bool:
+func _isRedForCar(car: Car, key: Vector2i) -> bool:
     var light: Dictionary = _trafficLights[key]
     var elapsed: float = _time - light.lastChanged
     var phaseDuration: float
@@ -296,7 +352,7 @@ func _isRedForCar(car: Dictionary, key: Vector2i) -> bool:
     return (isEW and light.phase == PhaseNS) or (not isEW and light.phase == PhaseEW)
 
 
-func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
+func _advanceCar(city: City, car: Car, delta: float) -> void:
     var lightKey := Vector2i(car.toVertStreet, car.toHorzStreet)
     var redLight: bool = _trafficLights.has(lightKey) and _isRedForCar(car, lightKey)
     var stopT: float = maxf(0.0, 1.0 - StopOffset / car.segLength)
@@ -332,7 +388,7 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
     var arrivedHorzStreet: int = car.toHorzStreet
 
     var neighbors: Array = _getExitSegments(
-            city, arrivedVertStreet, arrivedHorzStreet,
+            arrivedVertStreet, arrivedHorzStreet,
             car.fromVertStreet, car.fromHorzStreet)
     car.goalHops += 1
     if (arrivedVertStreet == car.goalIntersection.x \
@@ -345,7 +401,7 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
         nextToVertStreet = car.fromVertStreet
         nextToHorzStreet = car.fromHorzStreet
     else:
-        var chosen: Array = _greedyExit(city, neighbors, car.goalIntersection)
+        var chosen: Array = _greedyExit(neighbors, car.goalIntersection)
         nextToVertStreet = chosen[0]
         nextToHorzStreet = chosen[1]
 
@@ -356,17 +412,13 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
     car.toVertStreet = nextToVertStreet
     car.toHorzStreet = nextToHorzStreet
 
-    var segStart := Vector2(
-            _vertStreetCenterX(city, arrivedVertStreet),
-            _horzStreetCenterY(city, arrivedHorzStreet))
-    var segEnd := Vector2(
-            _vertStreetCenterX(city, nextToVertStreet),
-            _horzStreetCenterY(city, nextToHorzStreet))
-    car.segLength = segStart.distance_to(segEnd)
+    var dx: float = _vertStreetX[nextToVertStreet] - _vertStreetX[arrivedVertStreet]
+    var dy: float = _horzStreetY[nextToHorzStreet] - _horzStreetY[arrivedHorzStreet]
+    car.segLength = sqrt(dx * dx + dy * dy)
     if car.segLength < 0.5:
         car.segLength = 0.5
 
-    car.forward = (segEnd - segStart) / car.segLength
+    car.forward = Vector2(dx, dy) / car.segLength
 
     var isHorizontalSegment: bool = (nextToHorzStreet == arrivedHorzStreet)
     var streetWidth: float = city.horzStreetWidths[arrivedHorzStreet] \
@@ -381,13 +433,15 @@ func _advanceCar(city: City, car: Dictionary, delta: float) -> void:
 
     var seg := Vector4i(car.fromVertStreet, car.fromHorzStreet,
             car.toVertStreet, car.toHorzStreet)
-    car.segmentHistory.append(seg)
-    if car.segmentHistory.size() > 8:
-        car.segmentHistory.pop_front()
-    if car.segmentHistory.size() == 8:
+    car.historyBuf[car.historyHead] = seg
+    car.historyHead = (car.historyHead + 1) % HISTORY_SIZE
+    if car.historyCount < HISTORY_SIZE:
+        car.historyCount += 1
+    if car.historyCount == HISTORY_SIZE:
         var looping: bool = true
-        for i in range(4):
-            if car.segmentHistory[i] != car.segmentHistory[i + 4]:
+        for i in range(HISTORY_HALF):
+            if car.historyBuf[(car.historyHead + i) % HISTORY_SIZE] \
+                    != car.historyBuf[(car.historyHead + i + HISTORY_HALF) % HISTORY_SIZE]:
                 looping = false
                 break
         if looping:
@@ -406,30 +460,34 @@ func _buildTilesByZone(city: City) -> void:
             if not _tilesByZone.has(zone):
                 _tilesByZone[zone] = []
             _tilesByZone[zone].append(Vector2i(col, row))
+    _goalTotalWeight = 0.0
+    _goalCumWeights.clear()
+    _goalZones.clear()
+    var cumulative: float = 0.0
+    for zone: int in ZoneWeights:
+        if _tilesByZone.has(zone):
+            _goalTotalWeight += ZoneWeights[zone]
+            cumulative += ZoneWeights[zone]
+            _goalCumWeights.append(cumulative)
+            _goalZones.append(zone)
 
 
 func _pickGoalTile() -> Vector2i:
-    var totalWeight: float = 0.0
-    for zone: int in ZoneWeights:
-        if _tilesByZone.has(zone):
-            totalWeight += ZoneWeights[zone]
-    if totalWeight == 0.0:
+    if _goalTotalWeight == 0.0:
         return Vector2i(0, 0)
-    var roll: float = _rng.randf() * totalWeight
-    var cumulative: float = 0.0
-    var pickedZone: int = ZoneWeights.keys()[0]
-    for zone: int in ZoneWeights:
-        if _tilesByZone.has(zone):
-            cumulative += ZoneWeights[zone]
-            if roll <= cumulative:
-                pickedZone = zone
-                break
+    var roll: float = _rng.randf() * _goalTotalWeight
+    var pickedZone: int = _goalZones[_goalZones.size() - 1]
+    for i in range(_goalCumWeights.size()):
+        if roll <= _goalCumWeights[i]:
+            pickedZone = _goalZones[i]
+            break
     var tiles: Array = _tilesByZone[pickedZone]
     return tiles[_rng.randi() % tiles.size()]
 
 
-func _assignGoal(city: City, car: Dictionary) -> void:
-    car.segmentHistory.clear()
+func _assignGoal(city: City, car: Car) -> void:
+    car.historyHead = 0
+    car.historyCount = 0
     var tile: Vector2i = _pickGoalTile()
     car.goalTile = tile
     var corners: Array[Vector2i] = [
@@ -438,13 +496,13 @@ func _assignGoal(city: City, car: Dictionary) -> void:
         Vector2i(tile.x, tile.y + 1),
         Vector2i(tile.x + 1, tile.y + 1),
     ]
-    var curX: float = _vertStreetCenterX(city, car.toVertStreet)
-    var curY: float = _horzStreetCenterY(city, car.toHorzStreet)
+    var curX: float = _vertStreetX[car.toVertStreet]
+    var curY: float = _horzStreetY[car.toHorzStreet]
     var bestDist: float = INF
     var bestCorner := Vector2i(tile.x, tile.y)
     for corner: Vector2i in corners:
-        var cx: float = _vertStreetCenterX(city, corner.x)
-        var cy: float = _horzStreetCenterY(city, corner.y)
+        var cx: float = _vertStreetX[corner.x]
+        var cy: float = _horzStreetY[corner.y]
         var d: float = (curX - cx) * (curX - cx) + (curY - cy) * (curY - cy)
         if d < bestDist:
             bestDist = d
@@ -453,14 +511,14 @@ func _assignGoal(city: City, car: Dictionary) -> void:
     car.goalHops = 0
 
 
-func _greedyExit(city: City, candidates: Array, goalIntersection: Vector2i) -> Array:
-    var goalX: float = _vertStreetCenterX(city, goalIntersection.x)
-    var goalY: float = _horzStreetCenterY(city, goalIntersection.y)
+func _greedyExit(candidates: Array, goalIntersection: Vector2i) -> Array:
+    var goalX: float = _vertStreetX[goalIntersection.x]
+    var goalY: float = _horzStreetY[goalIntersection.y]
     var bestDist: float = INF
     var best: Array = candidates[0]
     for cand: Array in candidates:
-        var cx: float = _vertStreetCenterX(city, cand[0])
-        var cy: float = _horzStreetCenterY(city, cand[1])
+        var cx: float = _vertStreetX[cand[0]]
+        var cy: float = _horzStreetY[cand[1]]
         var d: float = (cx - goalX) * (cx - goalX) + (cy - goalY) * (cy - goalY)
         if d < bestDist:
             bestDist = d
@@ -468,23 +526,23 @@ func _greedyExit(city: City, candidates: Array, goalIntersection: Vector2i) -> A
     return best
 
 
-func _getExitSegments(city: City, vertStreetIdx: int, horzStreetIdx: int,
+func _getExitSegments(vertStreetIdx: int, horzStreetIdx: int,
         cameFromVertStreet: int, cameFromHorzStreet: int) -> Array:
     var exits: Array = []
     # East
     if not (cameFromVertStreet == vertStreetIdx + 1 and cameFromHorzStreet == horzStreetIdx) \
-            and _horzSegmentUsable(city, vertStreetIdx, horzStreetIdx):
+            and _horzUsableAt(vertStreetIdx, horzStreetIdx):
         exits.append([vertStreetIdx + 1, horzStreetIdx])
     # West
     if not (cameFromVertStreet == vertStreetIdx - 1 and cameFromHorzStreet == horzStreetIdx) \
-            and _horzSegmentUsable(city, vertStreetIdx - 1, horzStreetIdx):
+            and _horzUsableAt(vertStreetIdx - 1, horzStreetIdx):
         exits.append([vertStreetIdx - 1, horzStreetIdx])
     # South
     if not (cameFromVertStreet == vertStreetIdx and cameFromHorzStreet == horzStreetIdx + 1) \
-            and _vertSegmentUsable(city, vertStreetIdx, horzStreetIdx):
+            and _vertUsableAt(vertStreetIdx, horzStreetIdx):
         exits.append([vertStreetIdx, horzStreetIdx + 1])
     # North
     if not (cameFromVertStreet == vertStreetIdx and cameFromHorzStreet == horzStreetIdx - 1) \
-            and _vertSegmentUsable(city, vertStreetIdx, horzStreetIdx - 1):
+            and _vertUsableAt(vertStreetIdx, horzStreetIdx - 1):
         exits.append([vertStreetIdx, horzStreetIdx - 1])
     return exits

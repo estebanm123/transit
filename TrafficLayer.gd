@@ -19,4 +19,4 @@ func _process(delta: float) -> void:
 func _draw() -> void:
 	if _traffic == null or _city == null:
 		return
-	_traffic.drawCars(self, _city)
+	_traffic.drawCars(self)
