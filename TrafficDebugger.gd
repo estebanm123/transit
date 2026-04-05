@@ -49,6 +49,20 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                     car.leader.progress, car.leader.currentSpeed, gap])
         else:
             out.append("    leader: NONE (front of segment)")
+            var xdv: int = car.toVertStreet - car.fromVertStreet
+            var xdh: int = car.toHorzStreet - car.fromHorzStreet
+            var xNextKey := Vector4i(car.toVertStreet, car.toHorzStreet,
+                    car.toVertStreet + xdv, car.toHorzStreet + xdh)
+            var xNextTail: Traffic.Car = _traffic._segmentMap.get(xNextKey, null)
+            if xNextTail != null:
+                var xCrossGap: float = (1.0 - car.progress) * car.segLength \
+                        + xNextTail.progress * xNextTail.segLength - Traffic.CarLength
+                out.append("    xseg (v%d,h%d→v%d,h%d): tail.prog=%.4f spd=%.2f crossGap=%.2fu" % [
+                        xNextKey.x, xNextKey.y, xNextKey.z, xNextKey.w,
+                        xNextTail.progress, xNextTail.currentSpeed, xCrossGap])
+            else:
+                out.append("    xseg (v%d,h%d→v%d,h%d): empty" % [
+                        xNextKey.x, xNextKey.y, xNextKey.z, xNextKey.w])
         if car.follower != null:
             out.append("    follower: prog=%.4f spd=%.2f" % [
                     car.follower.progress, car.follower.currentSpeed])
@@ -81,9 +95,48 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
         if not redLight and car.progress > brakeStartT:
             intersectionBlocked = not _traffic._isIntersectionClear(
                     car.toVertStreet, car.toHorzStreet, isHoriz)
-        out.append("    stopT=%.4f brakeStartT=%.4f  red=%s intBlocked=%s shouldStop=%s" % [
+        var shouldStop: bool = redLight or intersectionBlocked
+        var limiter: String = "none"
+        var effSpeed: float = car.desiredSpeed
+        if shouldStop:
+            if car.progress > brakeStartT and stopT > brakeStartT:
+                effSpeed = car.desiredSpeed \
+                        * (stopT - car.progress) / (stopT - brakeStartT)
+            limiter = "intersection"
+        if car.leader != null and car.leader.progress > car.progress:
+            var dbgGap: float = (car.leader.progress - car.progress) \
+                    * car.segLength - Traffic.CarLength
+            if dbgGap <= 0.0:
+                effSpeed = 0.0
+                limiter = limiter + "+leader(gap<=0)" if limiter != "none" else "leader(gap<=0)"
+            elif dbgGap < Traffic.BrakingDistance:
+                var capped: float = minf(effSpeed, car.leader.currentSpeed)
+                if capped < effSpeed:
+                    limiter = limiter + "+leader" if limiter != "none" else "leader"
+                effSpeed = capped
+        if car.leader == null:
+            var xdv2: int = car.toVertStreet - car.fromVertStreet
+            var xdh2: int = car.toHorzStreet - car.fromHorzStreet
+            var xKey2 := Vector4i(car.toVertStreet, car.toHorzStreet,
+                    car.toVertStreet + xdv2, car.toHorzStreet + xdh2)
+            var xTail2: Traffic.Car = _traffic._segmentMap.get(xKey2, null)
+            if xTail2 != null:
+                var xGap2: float = (1.0 - car.progress) * car.segLength \
+                        + xTail2.progress * xTail2.segLength - Traffic.CarLength
+                if xGap2 <= 0.0:
+                    effSpeed = 0.0
+                    limiter = limiter + "+next_seg(gap<=0)" if limiter != "none" \
+                            else "next_seg(gap<=0)"
+                elif xGap2 < Traffic.BrakingDistance:
+                    var capped2: float = minf(effSpeed, xTail2.currentSpeed)
+                    if capped2 < effSpeed:
+                        limiter = limiter + "+next_seg" if limiter != "none" else "next_seg"
+                    effSpeed = capped2
+        out.append(("    stopT=%.4f brakeStartT=%.4f  red=%s intBlocked=%s shouldStop=%s" \
+                + "  limiter=%s effSpd=%.2f") % [
                 stopT, brakeStartT,
-                str(redLight), str(intersectionBlocked), str(redLight or intersectionBlocked)])
+                str(redLight), str(intersectionBlocked), str(shouldStop),
+                limiter, effSpeed])
 
         var dv: int = car.toVertStreet
         var dh: int = car.toHorzStreet
@@ -103,8 +156,8 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
             else:
                 var bT: float = Traffic.IntersectionBoxDepth / tail.segLength
                 out.append(
-                        "      depart (%d,%d)→(%d,%d): tail.prog=%.4f spd=%.2f" \
-                        + " boxThresh=%.4f inBox=%s moving=%s → %s" % [
+                        ("      depart (%d,%d)→(%d,%d): tail.prog=%.4f spd=%.2f" \
+                        + " boxThresh=%.4f inBox=%s moving=%s → %s") % [
                         key.x, key.y, key.z, key.w,
                         tail.progress, tail.currentSpeed, bT,
                         str(tail.progress < bT), str(tail.currentSpeed > 0.0),
@@ -118,8 +171,8 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                 var slT: float = 1.0 - Traffic.StopOffset / front.segLength
                 var pastStop: bool = front.progress >= slT
                 out.append(
-                        "      arrive (%d,%d)→(%d,%d): front.prog=%.4f spd=%.2f" \
-                        + " stopLineT=%.4f pastStop=%s moving=%s → %s" % [
+                        ("      arrive (%d,%d)→(%d,%d): front.prog=%.4f spd=%.2f" \
+                        + " stopLineT=%.4f pastStop=%s moving=%s → %s") % [
                         key.x, key.y, key.z, key.w,
                         front.progress, front.currentSpeed, slT,
                         str(pastStop), str(front.currentSpeed > 0.0),
@@ -152,8 +205,8 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                 var otherKey := Vector4i(other.fromVertStreet, other.fromHorzStreet,
                         other.toVertStreet, other.toHorzStreet)
                 out.append(
-                        "  %s: (v%d,h%d→v%d,h%d) p=%.4f spd=%.2f  ↔" \
-                        + "  (v%d,h%d→v%d,h%d) p=%.4f spd=%.2f" % [
+                        ("  %s: (v%d,h%d→v%d,h%d) p=%.4f spd=%.2f  ↔" \
+                        + "  (v%d,h%d→v%d,h%d) p=%.4f spd=%.2f") % [
                         "SAME_SEG" if otherKey == carKey else "CROSS_SEG",
                         carKey.x, carKey.y, carKey.z, carKey.w,
                         car.progress, car.currentSpeed,

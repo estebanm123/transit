@@ -412,10 +412,30 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
             effectiveSpeed = car.desiredSpeed \
                     * (stopT - car.progress) / (stopT - brakeStartT)
 
+    var limiter: String = "none"
     if car.leader != null and car.leader.progress > car.progress:
         var gap: float = (car.leader.progress - car.progress) * car.segLength - CarLength
-        if gap < BrakingDistance:
+        if gap <= 0.0:
+            effectiveSpeed = 0.0
+            limiter = "leader(gap<=0)"
+        elif gap < BrakingDistance:
             effectiveSpeed = minf(effectiveSpeed, car.leader.currentSpeed)
+            limiter = "leader"
+    if car.leader == null:
+        var dv: int = car.toVertStreet - car.fromVertStreet
+        var dh: int = car.toHorzStreet - car.fromHorzStreet
+        var nextKey := Vector4i(car.toVertStreet, car.toHorzStreet,
+                car.toVertStreet + dv, car.toHorzStreet + dh)
+        var nextTail: Car = _segmentMap.get(nextKey, null)
+        if nextTail != null:
+            var crossGap: float = (1.0 - car.progress) * car.segLength \
+                    + nextTail.progress * nextTail.segLength - CarLength
+            if crossGap <= 0.0:
+                effectiveSpeed = 0.0
+                limiter = "next_seg(gap<=0)"
+            elif crossGap < BrakingDistance:
+                effectiveSpeed = minf(effectiveSpeed, nextTail.currentSpeed)
+                limiter = "next_seg"
 
     car.currentSpeed = effectiveSpeed
     car.progress += effectiveSpeed * delta / car.segLength
