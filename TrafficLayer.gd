@@ -2,6 +2,7 @@ class_name TrafficLayer extends Node2D
 
 var _traffic: Traffic
 var _city: City
+var paused: bool = false
 
 
 func setup(traffic: Traffic, city: City) -> void:
@@ -10,7 +11,7 @@ func setup(traffic: Traffic, city: City) -> void:
 
 
 func _process(delta: float) -> void:
-	if _traffic == null:
+	if _traffic == null or paused:
 		return
 	_traffic.tick(_city, delta)
 	queue_redraw()

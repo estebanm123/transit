@@ -22,6 +22,7 @@ const PhaseNS: int = 0
 const PhaseEW: int = 1
 const StopOffset: float = CarLength * 2.0
 const BrakingDistance: float = 18.0
+const IntersectionBoxDepth: float = StopOffset
 
 const ArterialSpeedMultiplier: float = 4.0
 
@@ -69,6 +70,7 @@ var _cars: Array[Car] = []
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _trafficLights: Dictionary = {}
 var _segmentMap: Dictionary = {}
+var _segmentFront: Dictionary = {}
 var _tilesByZone: Dictionary = {}
 var _time: float = 0.0
 
@@ -157,6 +159,7 @@ func _vertUsableAt(v: int, h: int) -> bool:
 
 func _buildSegmentMap() -> void:
     _segmentMap.clear()
+    _segmentFront.clear()
     for car in _cars:
         car.leader = null
         car.follower = null
@@ -171,6 +174,7 @@ func _buildSegmentMap() -> void:
         var group: Array = groups[key]
         group.sort_custom(func(a: Car, b: Car) -> bool: return a.progress < b.progress)
         _segmentMap[key] = group[0]
+        _segmentFront[key] = group[group.size() - 1]
         for i in range(group.size() - 1):
             group[i].leader = group[i + 1]
             group[i + 1].follower = group[i]
@@ -186,6 +190,8 @@ func _insertIntoSegment(car: Car) -> void:
         if head != null:
             head.follower = car
         _segmentMap[key] = car
+        if car.leader == null:
+            _segmentFront[key] = car
         return
     var prev: Car = head
     while prev.leader != null and prev.leader.progress <= car.progress:
@@ -195,20 +201,27 @@ func _insertIntoSegment(car: Car) -> void:
     if prev.leader != null:
         prev.leader.follower = car
     prev.leader = car
+    if car.leader == null:
+        _segmentFront[key] = car
 
 
 func _removeFromSegment(car: Car) -> void:
+    var key := Vector4i(car.fromVertStreet, car.fromHorzStreet,
+            car.toVertStreet, car.toHorzStreet)
     if car.follower != null:
         car.follower.leader = car.leader
     else:
-        var key := Vector4i(car.fromVertStreet, car.fromHorzStreet,
-                car.toVertStreet, car.toHorzStreet)
         if car.leader != null:
             _segmentMap[key] = car.leader
         else:
             _segmentMap.erase(key)
     if car.leader != null:
         car.leader.follower = car.follower
+    else:
+        if car.follower != null:
+            _segmentFront[key] = car.follower
+        else:
+            _segmentFront.erase(key)
     car.leader = null
     car.follower = null
 
@@ -352,18 +365,49 @@ func _isRedForCar(car: Car, key: Vector2i) -> bool:
     return (isEW and light.phase == PhaseNS) or (not isEW and light.phase == PhaseEW)
 
 
+func _isIntersectionClear(v: int, h: int, isHorizontal: bool) -> bool:
+    var departing: Array[Vector4i]
+    var arriving: Array[Vector4i]
+    if isHorizontal:
+        departing = [Vector4i(v, h, v, h + 1), Vector4i(v, h, v, h - 1)]
+        arriving = [Vector4i(v, h - 1, v, h), Vector4i(v, h + 1, v, h)]
+    else:
+        departing = [Vector4i(v, h, v + 1, h), Vector4i(v, h, v - 1, h)]
+        arriving = [Vector4i(v - 1, h, v, h), Vector4i(v + 1, h, v, h)]
+    for key: Vector4i in departing:
+        var tail: Car = _segmentMap.get(key, null)
+        if tail != null and tail.currentSpeed > 0.0 \
+                and tail.progress < IntersectionBoxDepth / tail.segLength:
+            return false
+    for key: Vector4i in arriving:
+        var front: Car = _segmentFront.get(key, null)
+        if front == null:
+            continue
+        var stopLineT: float = 1.0 - StopOffset / front.segLength
+        if front.progress >= stopLineT and front.currentSpeed > 0.0:
+            return false
+    return true
+
+
 func _advanceCar(city: City, car: Car, delta: float) -> void:
     var lightKey := Vector2i(car.toVertStreet, car.toHorzStreet)
     var redLight: bool = _trafficLights.has(lightKey) and _isRedForCar(car, lightKey)
     var stopT: float = maxf(0.0, 1.0 - StopOffset / car.segLength)
+    var brakeStartT: float = stopT - BrakingDistance / car.segLength
 
-    if redLight and car.progress >= stopT:
+    var isHorizontal: bool = (car.toHorzStreet == car.fromHorzStreet)
+    var intersectionBlocked: bool = false
+    if not redLight and car.progress > brakeStartT:
+        intersectionBlocked = not _isIntersectionClear(
+                car.toVertStreet, car.toHorzStreet, isHorizontal)
+
+    var shouldStop: bool = redLight or intersectionBlocked
+    if shouldStop and car.progress >= stopT:
         car.currentSpeed = 0.0
         return
 
     var effectiveSpeed: float = car.desiredSpeed
-    if redLight:
-        var brakeStartT: float = stopT - BrakingDistance / car.segLength
+    if shouldStop:
         if car.progress > brakeStartT and stopT > brakeStartT:
             effectiveSpeed = car.desiredSpeed \
                     * (stopT - car.progress) / (stopT - brakeStartT)
@@ -376,7 +420,7 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
     car.currentSpeed = effectiveSpeed
     car.progress += effectiveSpeed * delta / car.segLength
 
-    if redLight:
+    if shouldStop:
         car.progress = minf(car.progress, stopT)
         return
 
