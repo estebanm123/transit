@@ -1,6 +1,6 @@
 class_name Traffic extends RefCounted
 
-const CarCount: int = 1600
+const CarCount: int = 16
 const CarSpeedMin: float = 4.25
 const CarSpeedMax: float = 9.35
 const CarLength: float = 2.8
@@ -15,9 +15,9 @@ const CarColors: Array[Color] = [
     Palette.CPink,
 ]
 
-const PhaseDuration: float = 15.0
-const PhaseArterialDuration: float = 25.0
-const PhaseNonArterialDuration: float = 8.0
+const PhaseDuration: float = 7.0
+const PhaseArterialDuration: float = 7.0
+const PhaseNonArterialDuration: float = 4.0
 const PhaseNS: int = 0
 const PhaseEW: int = 1
 const StopOffset: float = CarLength * 2.0
@@ -25,6 +25,7 @@ const BrakingDistance: float = 18.0
 const IntersectionBoxDepth: float = StopOffset
 
 const ArterialSpeedMultiplier: float = 4.0
+const CarAcceleration: float = 8.0
 
 const ZoneWeights: Dictionary = {
     Zone.Park: 2,
@@ -397,14 +398,11 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
 
     var isHorizontal: bool = (car.toHorzStreet == car.fromHorzStreet)
     var intersectionBlocked: bool = false
-    if not redLight and car.progress > brakeStartT:
+    if not redLight and car.progress > brakeStartT and car.progress < stopT:
         intersectionBlocked = not _isIntersectionClear(
                 car.toVertStreet, car.toHorzStreet, isHorizontal)
 
-    var shouldStop: bool = redLight or intersectionBlocked
-    if shouldStop and car.progress >= stopT:
-        car.currentSpeed = 0.0
-        return
+    var shouldStop: bool = car.progress < stopT and (redLight or intersectionBlocked)
 
     var effectiveSpeed: float = car.desiredSpeed
     if shouldStop:
@@ -437,8 +435,11 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
                 effectiveSpeed = minf(effectiveSpeed, nextTail.currentSpeed)
                 limiter = "next_seg"
 
-    car.currentSpeed = effectiveSpeed
-    car.progress += effectiveSpeed * delta / car.segLength
+    if effectiveSpeed > car.currentSpeed:
+        car.currentSpeed = move_toward(car.currentSpeed, effectiveSpeed, CarAcceleration * delta)
+    else:
+        car.currentSpeed = effectiveSpeed
+    car.progress += car.currentSpeed * delta / car.segLength
 
     if shouldStop:
         car.progress = minf(car.progress, stopT)

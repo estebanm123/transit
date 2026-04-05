@@ -92,10 +92,10 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
         var stopT: float = maxf(0.0, 1.0 - Traffic.StopOffset / car.segLength)
         var brakeStartT: float = stopT - Traffic.BrakingDistance / car.segLength
         var intersectionBlocked: bool = false
-        if not redLight and car.progress > brakeStartT:
+        if not redLight and car.progress > brakeStartT and car.progress < stopT:
             intersectionBlocked = not _traffic._isIntersectionClear(
                     car.toVertStreet, car.toHorzStreet, isHoriz)
-        var shouldStop: bool = redLight or intersectionBlocked
+        var shouldStop: bool = car.progress < stopT and (redLight or intersectionBlocked)
         var limiter: String = "none"
         var effSpeed: float = car.desiredSpeed
         if shouldStop:
