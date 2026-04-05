@@ -28,8 +28,8 @@ const ArterialSpeedMultiplier: float = 4.0
 const ZoneWeights: Dictionary = {
     Zone.Park: 2,
     Zone.Residential: 1,
-    Zone.HighDensityResidential: 10,
-    Zone.Commercial: 15,
+    Zone.HighDensityResidential: 12,
+    Zone.Commercial: 30,
     Zone.OfficeIndustry: 6,
 }
 const GoalHopsMax: int = 150
