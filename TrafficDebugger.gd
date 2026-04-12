@@ -71,11 +71,16 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                 var xChosenKey := Vector4i(car.toVertStreet, car.toHorzStreet,
                         xChosen[0], xChosen[1])
                 var xChosenTail: Traffic.Car = _traffic._segmentMap.get(xChosenKey, null)
+                var turnEntryDistance: float = _traffic._getTurnEntryDistance(
+                        car.fromVertStreet, car.fromHorzStreet,
+                        car.toVertStreet, car.toHorzStreet,
+                        xChosen[0], xChosen[1])
                 var xBoxThresh: float = 0.0
                 var xBoxClear: bool = _traffic._chosenExitHasBoxClearance(car, xChosen)
                 if xChosenTail != null:
                     xBoxThresh = minf(1.0,
-                            (Traffic.IntersectionBoxDepth + Traffic.CarLength)
+                            (maxf(Traffic.IntersectionBoxDepth, turnEntryDistance)
+                            + Traffic.CarLength)
                             / xChosenTail.segLength)
                 out.append("    chosenExitBoxClear=%s thresh=%.4f tailProg=%s" % [
                         str(xBoxClear), xBoxThresh,
