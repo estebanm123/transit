@@ -1,6 +1,6 @@
 class_name Traffic extends RefCounted
 
-const CarCount: int = 16
+const CarCount: int = 100
 const CarSpeedMin: float = 4.25
 const CarSpeedMax: float = 9.35
 const CarLength: float = 2.8
@@ -23,6 +23,7 @@ const PhaseEW: int = 1
 const StopOffset: float = CarLength * 2.0
 const BrakingDistance: float = 18.0
 const IntersectionBoxDepth: float = StopOffset
+const NoIntersection: Vector2i = Vector2i(-1, -1)
 
 const ArterialSpeedMultiplier: float = 4.0
 const CarAcceleration: float = 8.0
@@ -65,6 +66,7 @@ class Car extends RefCounted:
     ]
     var historyHead: int = 0
     var historyCount: int = 0
+    var reservedIntersection: Vector2i = NoIntersection
 
 
 var _cars: Array[Car] = []
@@ -72,8 +74,10 @@ var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _trafficLights: Dictionary = {}
 var _segmentMap: Dictionary = {}
 var _segmentFront: Dictionary = {}
+var _intersectionLocks: Dictionary = {}
 var _tilesByZone: Dictionary = {}
 var _time: float = 0.0
+var _lastDelta: float = 1.0 / 60.0
 
 var _vertStreetX: PackedFloat32Array
 var _horzStreetY: PackedFloat32Array
@@ -87,7 +91,9 @@ var _goalZones: Array[int] = []
 func init(city: City) -> void:
     _rng.seed = 99991
     _time = 0.0
+    _lastDelta = 1.0 / 60.0
     _trafficLights.clear()
+    _intersectionLocks.clear()
     for v in range(City.Cols + 1):
         for h in range(City.Rows + 1):
             if city.vertStreetWidths[v] >= City.WCollector \
@@ -122,6 +128,7 @@ func init(city: City) -> void:
 
 func tick(city: City, delta: float) -> void:
     _time += delta
+    _lastDelta = delta
     for car in _cars:
         _advanceCar(city, car, delta)
 
@@ -377,38 +384,146 @@ func _isIntersectionClear(v: int, h: int, isHorizontal: bool) -> bool:
         arriving = [Vector4i(v - 1, h, v, h), Vector4i(v + 1, h, v, h)]
     for key: Vector4i in departing:
         var tail: Car = _segmentMap.get(key, null)
-        if tail != null and tail.currentSpeed > 0.0 \
-                and tail.progress < IntersectionBoxDepth / tail.segLength:
+        if tail != null and tail.progress < IntersectionBoxDepth / tail.segLength:
             return false
     for key: Vector4i in arriving:
         var front: Car = _segmentFront.get(key, null)
         if front == null:
             continue
         var stopLineT: float = 1.0 - StopOffset / front.segLength
-        if front.progress >= stopLineT and front.currentSpeed > 0.0:
+        if front.progress > stopLineT \
+                or (front.progress >= stopLineT and front.currentSpeed > 0.0):
             return false
     return true
 
 
+func _carHoldsIntersection(car: Car, intersectionKey: Vector2i) -> bool:
+    return car.reservedIntersection == intersectionKey \
+            and _intersectionLocks.get(intersectionKey, null) == car
+
+
+func _exitHasBoxClearance(intersectionVertStreet: int, intersectionHorzStreet: int,
+        exitChoice: Array) -> bool:
+    if exitChoice.is_empty():
+        return true
+    var nextKey := Vector4i(
+            intersectionVertStreet, intersectionHorzStreet, exitChoice[0], exitChoice[1])
+    var nextTail: Car = _segmentMap.get(nextKey, null)
+    if nextTail == null:
+        return true
+    return nextTail.progress * nextTail.segLength >= IntersectionBoxDepth + CarLength
+
+
+func _chooseBestExit(candidates: Array, goalIntersection: Vector2i,
+        intersectionVertStreet: int, intersectionHorzStreet: int) -> Array:
+    if candidates.is_empty():
+        return []
+    var clearCandidates: Array = []
+    for candidate: Array in candidates:
+        if _exitHasBoxClearance(intersectionVertStreet, intersectionHorzStreet, candidate):
+            clearCandidates.append(candidate)
+    var selectedPool: Array = clearCandidates if not clearCandidates.is_empty() else candidates
+    return _greedyExit(selectedPool, goalIntersection)
+
+
+func _getGoalPreferredExit(car: Car) -> Array:
+    var exits: Array = _getExitSegments(car.toVertStreet, car.toHorzStreet,
+            car.fromVertStreet, car.fromHorzStreet)
+    if exits.is_empty():
+        return []
+    return _greedyExit(exits, car.goalIntersection)
+
+
+func _getChosenExit(car: Car) -> Array:
+    var exits: Array = _getExitSegments(car.toVertStreet, car.toHorzStreet,
+            car.fromVertStreet, car.fromHorzStreet)
+    return _chooseBestExit(exits, car.goalIntersection, car.toVertStreet, car.toHorzStreet)
+
+
+func _chosenExitHasBoxClearance(car: Car, chosenExit: Array = []) -> bool:
+    var exitChoice: Array = chosenExit if not chosenExit.is_empty() else _getChosenExit(car)
+    return _exitHasBoxClearance(car.toVertStreet, car.toHorzStreet, exitChoice)
+
+
+func _claimIntersection(car: Car, intersectionKey: Vector2i) -> void:
+    _intersectionLocks[intersectionKey] = car
+    car.reservedIntersection = intersectionKey
+
+
+func _releaseIntersection(car: Car) -> void:
+    if car.reservedIntersection == NoIntersection:
+        return
+    if _intersectionLocks.get(car.reservedIntersection, null) == car:
+        _intersectionLocks.erase(car.reservedIntersection)
+    car.reservedIntersection = NoIntersection
+
+
+func _releaseIntersectionIfCleared(car: Car) -> void:
+    if car.reservedIntersection == NoIntersection:
+        return
+    if car.fromVertStreet != car.reservedIntersection.x \
+            or car.fromHorzStreet != car.reservedIntersection.y:
+        return
+    if car.progress >= IntersectionBoxDepth / car.segLength:
+        _releaseIntersection(car)
+
+
 func _advanceCar(city: City, car: Car, delta: float) -> void:
+    _releaseIntersectionIfCleared(car)
+
     var lightKey := Vector2i(car.toVertStreet, car.toHorzStreet)
     var redLight: bool = _trafficLights.has(lightKey) and _isRedForCar(car, lightKey)
     var stopT: float = maxf(0.0, 1.0 - StopOffset / car.segLength)
     var brakeStartT: float = stopT - BrakingDistance / car.segLength
+    var projectedProgress: float = car.progress \
+            + maxf(car.currentSpeed, car.desiredSpeed) * delta / car.segLength
+    var holdsIntersection: bool = _carHoldsIntersection(car, lightKey)
+    var chosenExit: Array = []
+    var chosenExitHasBoxClearance: bool = true
+    if car.leader == null:
+        chosenExit = _getChosenExit(car)
+        chosenExitHasBoxClearance = _chosenExitHasBoxClearance(car, chosenExit)
 
-    var isHorizontal: bool = (car.toHorzStreet == car.fromHorzStreet)
+    if redLight and car.progress <= stopT and holdsIntersection:
+        _releaseIntersection(car)
+        holdsIntersection = false
+
     var intersectionBlocked: bool = false
-    if not redLight and car.progress > brakeStartT and car.progress < stopT:
-        intersectionBlocked = not _isIntersectionClear(
-                car.toVertStreet, car.toHorzStreet, isHorizontal)
+    var needsIntersectionControl: bool = holdsIntersection \
+            or car.progress > stopT \
+            or projectedProgress > stopT
+    if not redLight and needsIntersectionControl:
+        var locker: Car = _intersectionLocks.get(lightKey, null)
+        if locker != null and locker != car:
+            intersectionBlocked = true
+        elif not holdsIntersection:
+            if car.progress > stopT and car.leader == null:
+                _claimIntersection(car, lightKey)
+                holdsIntersection = true
+            elif car.progress <= stopT and car.leader != null:
+                intersectionBlocked = true
+            else:
+                var isHorizontal: bool = (car.toHorzStreet == car.fromHorzStreet)
+                intersectionBlocked = not _isIntersectionClear(
+                        car.toVertStreet, car.toHorzStreet, isHorizontal)
+                if not intersectionBlocked and not chosenExitHasBoxClearance:
+                    intersectionBlocked = true
+                if not intersectionBlocked and car.leader == null \
+                        and projectedProgress > stopT:
+                    _claimIntersection(car, lightKey)
+                    holdsIntersection = true
 
-    var shouldStop: bool = car.progress < stopT and (redLight or intersectionBlocked)
+    var shouldStop: bool = car.progress <= stopT and (redLight or intersectionBlocked)
+    var committedBlocked: bool = car.progress > stopT and car.progress < 1.0 \
+            and intersectionBlocked
 
     var effectiveSpeed: float = car.desiredSpeed
     if shouldStop:
         if car.progress > brakeStartT and stopT > brakeStartT:
             effectiveSpeed = car.desiredSpeed \
                     * (stopT - car.progress) / (stopT - brakeStartT)
+    elif committedBlocked:
+        effectiveSpeed = 0.0
 
     var limiter: String = "none"
     if car.leader != null and car.leader.progress > car.progress:
@@ -417,23 +532,29 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
             effectiveSpeed = 0.0
             limiter = "leader(gap<=0)"
         elif gap < BrakingDistance:
-            effectiveSpeed = minf(effectiveSpeed, car.leader.currentSpeed)
+            var t: float = gap / BrakingDistance
+            effectiveSpeed = minf(effectiveSpeed, lerpf(car.leader.currentSpeed, effectiveSpeed, t))
             limiter = "leader"
     if car.leader == null:
-        var dv: int = car.toVertStreet - car.fromVertStreet
-        var dh: int = car.toHorzStreet - car.fromHorzStreet
-        var nextKey := Vector4i(car.toVertStreet, car.toHorzStreet,
-                car.toVertStreet + dv, car.toHorzStreet + dh)
-        var nextTail: Car = _segmentMap.get(nextKey, null)
-        if nextTail != null:
-            var crossGap: float = (1.0 - car.progress) * car.segLength \
-                    + nextTail.progress * nextTail.segLength - CarLength
-            if crossGap <= 0.0:
-                effectiveSpeed = 0.0
-                limiter = "next_seg(gap<=0)"
-            elif crossGap < BrakingDistance:
-                effectiveSpeed = minf(effectiveSpeed, nextTail.currentSpeed)
-                limiter = "next_seg"
+        if not chosenExit.is_empty():
+            var nextKey := Vector4i(car.toVertStreet, car.toHorzStreet,
+                chosenExit[0], chosenExit[1])
+            var nextTail: Car = _segmentMap.get(nextKey, null)
+            if nextTail != null:
+                var crossGap: float = (1.0 - car.progress) * car.segLength \
+                        + nextTail.progress * nextTail.segLength - CarLength
+                if crossGap <= 0.0:
+                    effectiveSpeed = 0.0
+                    limiter = "next_seg(gap<=0)"
+                elif crossGap < BrakingDistance:
+                    var t: float = crossGap / BrakingDistance
+                    effectiveSpeed = minf(effectiveSpeed, lerpf(nextTail.currentSpeed, effectiveSpeed, t))
+                    limiter = "next_seg"
+
+    var nextProgress: float = car.progress + effectiveSpeed * delta / car.segLength
+    if holdsIntersection and car.progress <= stopT and nextProgress <= stopT:
+        _releaseIntersection(car)
+        holdsIntersection = false
 
     if effectiveSpeed > car.currentSpeed:
         car.currentSpeed = move_toward(car.currentSpeed, effectiveSpeed, CarAcceleration * delta)
@@ -443,9 +564,11 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
 
     if shouldStop:
         car.progress = minf(car.progress, stopT)
+        _releaseIntersectionIfCleared(car)
         return
 
     if car.progress < 1.0:
+        _releaseIntersectionIfCleared(car)
         return
 
     var overflow: float = car.progress - 1.0
@@ -466,9 +589,20 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
         nextToVertStreet = car.fromVertStreet
         nextToHorzStreet = car.fromHorzStreet
     else:
-        var chosen: Array = _greedyExit(neighbors, car.goalIntersection)
+        var chosen: Array = _chooseBestExit(
+                neighbors, car.goalIntersection, arrivedVertStreet, arrivedHorzStreet)
         nextToVertStreet = chosen[0]
         nextToHorzStreet = chosen[1]
+
+    var entryDx: float = _vertStreetX[nextToVertStreet] - _vertStreetX[arrivedVertStreet]
+    var entryDy: float = _horzStreetY[nextToHorzStreet] - _horzStreetY[arrivedHorzStreet]
+    var entrySegLen: float = maxf(0.5, sqrt(entryDx * entryDx + entryDy * entryDy))
+    var entryKey := Vector4i(arrivedVertStreet, arrivedHorzStreet, nextToVertStreet, nextToHorzStreet)
+    var entryTail: Car = _segmentMap.get(entryKey, null)
+    if entryTail != null and entryTail.progress * entrySegLen < CarLength:
+        car.progress = 1.0 - 0.0001
+        car.currentSpeed = 0.0
+        return
 
     _removeFromSegment(car)
 
@@ -495,6 +629,13 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
     car.progress = overflow / car.segLength
 
     _insertIntoSegment(car)
+
+    if car.leader != null:
+        var maxProg: float = car.leader.progress - CarLength / car.segLength
+        if car.progress > maxProg:
+            car.progress = maxf(0.0, maxProg)
+
+    _releaseIntersectionIfCleared(car)
 
     var seg := Vector4i(car.fromVertStreet, car.fromHorzStreet,
             car.toVertStreet, car.toHorzStreet)

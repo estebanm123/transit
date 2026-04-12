@@ -49,20 +49,41 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                     car.leader.progress, car.leader.currentSpeed, gap])
         else:
             out.append("    leader: NONE (front of segment)")
-            var xdv: int = car.toVertStreet - car.fromVertStreet
-            var xdh: int = car.toHorzStreet - car.fromHorzStreet
-            var xNextKey := Vector4i(car.toVertStreet, car.toHorzStreet,
-                    car.toVertStreet + xdv, car.toHorzStreet + xdh)
-            var xNextTail: Traffic.Car = _traffic._segmentMap.get(xNextKey, null)
-            if xNextTail != null:
-                var xCrossGap: float = (1.0 - car.progress) * car.segLength \
-                        + xNextTail.progress * xNextTail.segLength - Traffic.CarLength
-                out.append("    xseg (v%d,h%d→v%d,h%d): tail.prog=%.4f spd=%.2f crossGap=%.2fu" % [
-                        xNextKey.x, xNextKey.y, xNextKey.z, xNextKey.w,
-                        xNextTail.progress, xNextTail.currentSpeed, xCrossGap])
-            else:
-                out.append("    xseg (v%d,h%d→v%d,h%d): empty" % [
-                        xNextKey.x, xNextKey.y, xNextKey.z, xNextKey.w])
+            var xExits: Array = _traffic._getExitSegments(car.toVertStreet, car.toHorzStreet,
+                    car.fromVertStreet, car.fromHorzStreet)
+            var xGoalPreferred: Array = _traffic._getGoalPreferredExit(car)
+            var xChosen: Array = _traffic._getChosenExit(car)
+            for xExit: Array in xExits:
+                var xKey := Vector4i(car.toVertStreet, car.toHorzStreet, xExit[0], xExit[1])
+                var xTail: Traffic.Car = _traffic._segmentMap.get(xKey, null)
+                var xMark: String = " [CHOSEN]" if not xChosen.is_empty() \
+                        and xExit[0] == xChosen[0] and xExit[1] == xChosen[1] else ""
+                if xTail != null:
+                    var xCrossGap: float = (1.0 - car.progress) * car.segLength \
+                            + xTail.progress * xTail.segLength - Traffic.CarLength
+                    out.append("    xseg (v%d,h%d→v%d,h%d)%s: tail.prog=%.4f spd=%.2f crossGap=%.2fu" % [
+                            xKey.x, xKey.y, xKey.z, xKey.w, xMark,
+                            xTail.progress, xTail.currentSpeed, xCrossGap])
+                else:
+                    out.append("    xseg (v%d,h%d→v%d,h%d)%s: empty" % [
+                            xKey.x, xKey.y, xKey.z, xKey.w, xMark])
+            if not xChosen.is_empty():
+                var xChosenKey := Vector4i(car.toVertStreet, car.toHorzStreet,
+                        xChosen[0], xChosen[1])
+                var xChosenTail: Traffic.Car = _traffic._segmentMap.get(xChosenKey, null)
+                var xBoxThresh: float = 0.0
+                var xBoxClear: bool = _traffic._chosenExitHasBoxClearance(car, xChosen)
+                if xChosenTail != null:
+                    xBoxThresh = minf(1.0,
+                            (Traffic.IntersectionBoxDepth + Traffic.CarLength)
+                            / xChosenTail.segLength)
+                out.append("    chosenExitBoxClear=%s thresh=%.4f tailProg=%s" % [
+                        str(xBoxClear), xBoxThresh,
+                        "%.4f" % xChosenTail.progress if xChosenTail != null else "NONE"])
+                if not xGoalPreferred.is_empty() \
+                    and (xGoalPreferred[0] != xChosen[0] or xGoalPreferred[1] != xChosen[1]):
+                    out.append("    chosenExitFallback: goal=(v%d,h%d) active=(v%d,h%d)" % [
+                        xGoalPreferred[0], xGoalPreferred[1], xChosen[0], xChosen[1]])
         if car.follower != null:
             out.append("    follower: prog=%.4f spd=%.2f" % [
                     car.follower.progress, car.follower.currentSpeed])
@@ -89,13 +110,77 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
         else:
             out.append("    light: none")
 
+        if car.reservedIntersection != Traffic.NoIntersection:
+            out.append("    reservation: (v%d,h%d) held=%s" % [
+                    car.reservedIntersection.x, car.reservedIntersection.y,
+                    str(_traffic._carHoldsIntersection(car, car.reservedIntersection))])
+            if car.reservedIntersection != lightKey:
+                var staleThreshold: float = Traffic.IntersectionBoxDepth / car.segLength
+                out.append("    reservationScope: previous_intersection clearThresh=%.4f staleNow=%s" % [
+                        staleThreshold, str(car.progress >= staleThreshold)])
+        else:
+            out.append("    reservation: none")
+        var lockOwner: Traffic.Car = _traffic._intersectionLocks.get(lightKey, null)
+        if lockOwner != null:
+            out.append("    lockOwner: seg=(v%d,h%d)→(v%d,h%d) prog=%.4f self=%s" % [
+                    lockOwner.fromVertStreet, lockOwner.fromHorzStreet,
+                    lockOwner.toVertStreet, lockOwner.toHorzStreet,
+                    lockOwner.progress, str(lockOwner == car)])
+        else:
+            out.append("    lockOwner: none")
+
         var stopT: float = maxf(0.0, 1.0 - Traffic.StopOffset / car.segLength)
         var brakeStartT: float = stopT - Traffic.BrakingDistance / car.segLength
+        var projectedProgress: float = car.progress \
+            + maxf(car.currentSpeed, car.desiredSpeed) * _traffic._lastDelta / car.segLength
         var intersectionBlocked: bool = false
-        if not redLight and car.progress > brakeStartT and car.progress < stopT:
-            intersectionBlocked = not _traffic._isIntersectionClear(
-                    car.toVertStreet, car.toHorzStreet, isHoriz)
-        var shouldStop: bool = car.progress < stopT and (redLight or intersectionBlocked)
+        var intCheckStatus: String
+        var holdsIntersection: bool = _traffic._carHoldsIntersection(car, lightKey)
+        var needsIntersectionControl: bool = holdsIntersection \
+                or car.progress > stopT \
+                or projectedProgress > stopT
+        var chosenExit: Array = []
+        var chosenExitHasBoxClearance: bool = true
+        if car.leader == null:
+            chosenExit = _traffic._getChosenExit(car)
+            chosenExitHasBoxClearance = _traffic._chosenExitHasBoxClearance(car, chosenExit)
+        if redLight:
+            intCheckStatus = "no(red)"
+        elif holdsIntersection:
+            intCheckStatus = "reserved"
+        elif not needsIntersectionControl:
+            intCheckStatus = "no(stopline)"
+        else:
+            var locker: Traffic.Car = _traffic._intersectionLocks.get(lightKey, null)
+            if locker != null and locker != car:
+                intersectionBlocked = true
+                intCheckStatus = "locked"
+            elif car.progress > stopT and car.leader == null:
+                intCheckStatus = "reclaim"
+            elif car.progress <= stopT and car.leader != null:
+                intersectionBlocked = true
+                intCheckStatus = "no(front_car)"
+            else:
+                intersectionBlocked = not _traffic._isIntersectionClear(
+                        car.toVertStreet, car.toHorzStreet, isHoriz)
+                if not intersectionBlocked and not chosenExitHasBoxClearance:
+                    intersectionBlocked = true
+                    intCheckStatus = "exit_boxed"
+                if car.progress > stopT:
+                    intCheckStatus = "committed(%s)" % (
+                            "blocked" if intersectionBlocked else "clear")
+                elif intCheckStatus == "exit_boxed":
+                    pass
+                elif not intersectionBlocked and car.leader == null \
+                        and projectedProgress > stopT:
+                    intCheckStatus = "claim"
+                else:
+                    intCheckStatus = "yes"
+        var shouldStop: bool = car.progress <= stopT \
+                and (redLight or intersectionBlocked)
+        var committedBlocked: bool = car.progress > stopT and car.progress < 1.0 \
+                and intersectionBlocked
+        var committedWithoutLock: bool = car.progress > stopT and not holdsIntersection
         var limiter: String = "none"
         var effSpeed: float = car.desiredSpeed
         if shouldStop:
@@ -103,6 +188,9 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                 effSpeed = car.desiredSpeed \
                         * (stopT - car.progress) / (stopT - brakeStartT)
             limiter = "intersection"
+        elif committedBlocked:
+            effSpeed = 0.0
+            limiter = "committed_block"
         if car.leader != null and car.leader.progress > car.progress:
             var dbgGap: float = (car.leader.progress - car.progress) \
                     * car.segLength - Traffic.CarLength
@@ -132,11 +220,13 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                     if capped2 < effSpeed:
                         limiter = limiter + "+next_seg" if limiter != "none" else "next_seg"
                     effSpeed = capped2
-        out.append(("    stopT=%.4f brakeStartT=%.4f  red=%s intBlocked=%s shouldStop=%s" \
-                + "  limiter=%s effSpd=%.2f") % [
+        out.append(("    stopT=%.4f brakeStartT=%.4f  red=%s intCheck=%s intBlocked=%s" \
+                + " shouldStop=%s committedBlocked=%s  limiter=%s effSpd=%.2f") % [
                 stopT, brakeStartT,
-                str(redLight), str(intersectionBlocked), str(shouldStop),
-                limiter, effSpeed])
+                str(redLight), intCheckStatus, str(intersectionBlocked), str(shouldStop),
+                str(committedBlocked), limiter, effSpeed])
+        if committedWithoutLock:
+            out.append("    anomaly: committed_without_lock")
 
         var dv: int = car.toVertStreet
         var dh: int = car.toHorzStreet
@@ -162,7 +252,7 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                         tail.progress, tail.currentSpeed, bT,
                         str(tail.progress < bT), str(tail.currentSpeed > 0.0),
                         "BLOCKING" if tail.progress < bT and tail.currentSpeed > 0.0 \
-                        else "clear"])
+                        else ("IN_BOX_STOPPED" if tail.progress < bT else "clear")])
         for key: Vector4i in arriving:
             var front: Traffic.Car = _traffic._segmentFront.get(key, null)
             if front == null:
@@ -176,7 +266,8 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                         key.x, key.y, key.z, key.w,
                         front.progress, front.currentSpeed, slT,
                         str(pastStop), str(front.currentSpeed > 0.0),
-                        "BLOCKING" if pastStop and front.currentSpeed > 0.0 else "clear"])
+                        "BLOCKING" if pastStop and front.currentSpeed > 0.0 \
+                        else ("COMMITTED_STOPPED" if pastStop else "clear")])
 
     out.append("")
     out.append("--- Overlaps ---")
