@@ -1,6 +1,6 @@
 class_name Traffic extends RefCounted
 
-const CarCount: int = 100
+const CarCount: int = 1000
 const CarSpeedMin: float = 4.25
 const CarSpeedMax: float = 9.35
 const CarLength: float = 2.8
@@ -23,6 +23,7 @@ const PhaseEW: int = 1
 const StopOffset: float = CarLength * 2.0
 const BrakingDistance: float = 18.0
 const IntersectionBoxDepth: float = StopOffset
+const ReservationReleaseEpsilon: float = 0.00001
 const NoIntersection: Vector2i = Vector2i(-1, -1)
 
 const ArterialSpeedMultiplier: float = 4.0
@@ -344,6 +345,18 @@ func _getTurnEntryDistance(fromVertStreet: int, fromHorzStreet: int,
     return maxf(0.0, (prevLaneOffset - nextLaneOffset).dot(nextForward))
 
 
+func _getStopLineProgress(segLength: float) -> float:
+    return maxf(0.0, 1.0 - StopOffset / maxf(segLength, 0.5))
+
+
+func _getIntersectionBoxProgress(segLength: float) -> float:
+    return minf(1.0, IntersectionBoxDepth / maxf(segLength, 0.5))
+
+
+func _getReservationReleaseProgress(segLength: float) -> float:
+    return minf(_getIntersectionBoxProgress(segLength), _getStopLineProgress(segLength))
+
+
 func _spawnCar(city: City) -> Car:
     var isHorizontalSegment: bool = _rng.randf() < 0.5
     var fromVertStreet: int
@@ -424,13 +437,13 @@ func _isIntersectionClear(v: int, h: int, isHorizontal: bool) -> bool:
         arriving = [Vector4i(v - 1, h, v, h), Vector4i(v + 1, h, v, h)]
     for key: Vector4i in departing:
         var tail: Car = _segmentMap.get(key, null)
-        if tail != null and tail.progress < IntersectionBoxDepth / tail.segLength:
+        if tail != null and tail.progress < _getIntersectionBoxProgress(tail.segLength):
             return false
     for key: Vector4i in arriving:
         var front: Car = _segmentFront.get(key, null)
         if front == null:
             continue
-        var stopLineT: float = 1.0 - StopOffset / front.segLength
+        var stopLineT: float = _getStopLineProgress(front.segLength)
         if front.progress > stopLineT \
                 or (front.progress >= stopLineT and front.currentSpeed > 0.0):
             return false
@@ -439,7 +452,25 @@ func _isIntersectionClear(v: int, h: int, isHorizontal: bool) -> bool:
 
 func _carHoldsIntersection(car: Car, intersectionKey: Vector2i) -> bool:
     return car.reservedIntersection == intersectionKey \
-            and _intersectionLocks.get(intersectionKey, null) == car
+            and _getIntersectionLockOwner(intersectionKey) == car
+
+
+func _getIntersectionLockOwner(intersectionKey: Vector2i) -> Car:
+    var locker: Car = _intersectionLocks.get(intersectionKey, null)
+    if locker == null:
+        return null
+    if locker.reservedIntersection != intersectionKey:
+        _intersectionLocks.erase(intersectionKey)
+        return null
+    if locker.fromVertStreet != intersectionKey.x \
+            and locker.toVertStreet != intersectionKey.x:
+        _releaseIntersection(locker)
+        return null
+    if locker.fromHorzStreet != intersectionKey.y \
+            and locker.toHorzStreet != intersectionKey.y:
+        _releaseIntersection(locker)
+        return null
+    return locker
 
 
 func _exitHasBoxClearance(cameFromVertStreet: int, cameFromHorzStreet: int,
@@ -499,6 +530,10 @@ func _chosenExitHasBoxClearance(car: Car, chosenExit: Array = []) -> bool:
 
 
 func _claimIntersection(car: Car, intersectionKey: Vector2i) -> void:
+    if car.reservedIntersection != NoIntersection \
+            and car.reservedIntersection != intersectionKey \
+            and _intersectionLocks.get(car.reservedIntersection, null) == car:
+        _intersectionLocks.erase(car.reservedIntersection)
     _intersectionLocks[intersectionKey] = car
     car.reservedIntersection = intersectionKey
 
@@ -514,10 +549,15 @@ func _releaseIntersection(car: Car) -> void:
 func _releaseIntersectionIfCleared(car: Car) -> void:
     if car.reservedIntersection == NoIntersection:
         return
+    if car.toVertStreet == car.reservedIntersection.x \
+            and car.toHorzStreet == car.reservedIntersection.y:
+        return
     if car.fromVertStreet != car.reservedIntersection.x \
             or car.fromHorzStreet != car.reservedIntersection.y:
+        _releaseIntersection(car)
         return
-    if car.progress >= IntersectionBoxDepth / car.segLength:
+    var releaseThreshold: float = _getReservationReleaseProgress(car.segLength)
+    if car.progress + ReservationReleaseEpsilon >= releaseThreshold:
         _releaseIntersection(car)
 
 
@@ -526,7 +566,7 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
 
     var lightKey := Vector2i(car.toVertStreet, car.toHorzStreet)
     var redLight: bool = _trafficLights.has(lightKey) and _isRedForCar(car, lightKey)
-    var stopT: float = maxf(0.0, 1.0 - StopOffset / car.segLength)
+    var stopT: float = _getStopLineProgress(car.segLength)
     var brakeStartT: float = stopT - BrakingDistance / car.segLength
     var projectedProgress: float = car.progress \
             + maxf(car.currentSpeed, car.desiredSpeed) * delta / car.segLength
@@ -546,7 +586,7 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
             or car.progress > stopT \
             or projectedProgress > stopT
     if not redLight and needsIntersectionControl:
-        var locker: Car = _intersectionLocks.get(lightKey, null)
+        var locker: Car = _getIntersectionLockOwner(lightKey)
         if locker != null and locker != car:
             intersectionBlocked = true
         elif not holdsIntersection:

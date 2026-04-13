@@ -1,5 +1,8 @@
 class_name TrafficDebugger extends RefCounted
 
+const ReleaseCmpEpsSmall: float = 0.000001
+const ReleaseCmpEpsLarge: float = 0.00001
+
 var _traffic: Traffic
 
 
@@ -13,6 +16,85 @@ func _carWorldPos(car: Traffic.Car) -> Vector2:
                 _traffic._vertStreetX[car.toVertStreet], car.progress) + car.laneOffset.x,
         lerpf(_traffic._horzStreetY[car.fromHorzStreet],
                 _traffic._horzStreetY[car.toHorzStreet], car.progress) + car.laneOffset.y)
+
+
+func _carLabel(car: Traffic.Car) -> String:
+    return "(v%d,h%d)→(v%d,h%d) p=%.4f" % [
+            car.fromVertStreet, car.fromHorzStreet,
+            car.toVertStreet, car.toHorzStreet,
+            car.progress]
+
+
+func _intersectionLabel(intersectionKey: Vector2i) -> String:
+    if intersectionKey == Traffic.NoIntersection:
+        return "none"
+    return "(v%d,h%d)" % [intersectionKey.x, intersectionKey.y]
+
+
+func _getThresholdCompareInfo(value: float, threshold: float) -> Dictionary:
+    var delta: float = value - threshold
+    return {
+        "value": value,
+        "threshold": threshold,
+        "delta": delta,
+        "absDelta": absf(delta),
+        "exactPass": value >= threshold,
+        "smallEpsPass": value + ReleaseCmpEpsSmall >= threshold,
+        "largeEpsPass": value + ReleaseCmpEpsLarge >= threshold,
+    }
+
+
+func _getReservationDebugInfo(car: Traffic.Car) -> Dictionary:
+    var info: Dictionary = {
+        "holds": false,
+        "scope": "none",
+        "releaseState": "none",
+        "releaseThreshold": 0.0,
+        "rawClearThreshold": 0.0,
+        "stopThreshold": 0.0,
+        "releaseDelta": 0.0,
+        "releaseExactPass": false,
+        "releaseSmallEpsPass": false,
+        "releaseLargeEpsPass": false,
+        "releaseRuntimePass": false,
+        "releaseAbsDelta": 0.0,
+        "stopDelta": 0.0,
+        "stopExactPass": false,
+        "stopSmallEpsPass": false,
+    }
+    if car.reservedIntersection == Traffic.NoIntersection:
+        return info
+    info["holds"] = _traffic._carHoldsIntersection(car, car.reservedIntersection)
+    if car.reservedIntersection == Vector2i(car.toVertStreet, car.toHorzStreet):
+        info["scope"] = "current_intersection"
+        info["releaseState"] = "active_target"
+        return info
+    info["scope"] = "previous_intersection"
+    info["rawClearThreshold"] = _traffic._getIntersectionBoxProgress(car.segLength)
+    info["releaseThreshold"] = _traffic._getReservationReleaseProgress(car.segLength)
+    info["stopThreshold"] = _traffic._getStopLineProgress(car.segLength)
+    var releaseCmp: Dictionary = _getThresholdCompareInfo(car.progress, info["releaseThreshold"])
+    var stopCmp: Dictionary = _getThresholdCompareInfo(car.progress, info["stopThreshold"])
+    info["releaseDelta"] = releaseCmp["delta"]
+    info["releaseAbsDelta"] = releaseCmp["absDelta"]
+    info["releaseExactPass"] = releaseCmp["exactPass"]
+    info["releaseSmallEpsPass"] = releaseCmp["smallEpsPass"]
+    info["releaseLargeEpsPass"] = releaseCmp["largeEpsPass"]
+    info["releaseRuntimePass"] = car.progress + Traffic.ReservationReleaseEpsilon \
+            >= info["releaseThreshold"]
+    info["stopDelta"] = stopCmp["delta"]
+    info["stopExactPass"] = stopCmp["exactPass"]
+    info["stopSmallEpsPass"] = stopCmp["smallEpsPass"]
+    if car.fromVertStreet != car.reservedIntersection.x \
+            or car.fromHorzStreet != car.reservedIntersection.y:
+        info["releaseState"] = "segment_mismatch"
+    elif releaseCmp["exactPass"]:
+        info["releaseState"] = "eligible_now"
+    elif info["releaseRuntimePass"]:
+        info["releaseState"] = "eligible_epsilon"
+    else:
+        info["releaseState"] = "waiting_progress"
+    return info
 
 
 func debugCarsNear(worldPos: Vector2, radius: float) -> void:
@@ -115,26 +197,68 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
         else:
             out.append("    light: none")
 
+        var reservationInfo: Dictionary = _getReservationDebugInfo(car)
         if car.reservedIntersection != Traffic.NoIntersection:
             out.append("    reservation: (v%d,h%d) held=%s" % [
                     car.reservedIntersection.x, car.reservedIntersection.y,
-                    str(_traffic._carHoldsIntersection(car, car.reservedIntersection))])
-            if car.reservedIntersection != lightKey:
-                var staleThreshold: float = Traffic.IntersectionBoxDepth / car.segLength
-                out.append("    reservationScope: previous_intersection clearThresh=%.4f staleNow=%s" % [
-                        staleThreshold, str(car.progress >= staleThreshold)])
+                    str(reservationInfo["holds"])])
+            if reservationInfo["scope"] == "previous_intersection":
+                var rawClearThreshold: float = _traffic._getIntersectionBoxProgress(car.segLength)
+                var releaseThreshold: float = _traffic._getReservationReleaseProgress(car.segLength)
+                var stopThreshold: float = _traffic._getStopLineProgress(car.segLength)
+                out.append(
+                    "    reservationScope: previous_intersection releaseThresh=%.4f rawClear=%.4f nextStop=%.4f overlap=%s delta=%.6f releaseState=%s" % [
+                    releaseThreshold, rawClearThreshold, stopThreshold,
+                    str(rawClearThreshold > stopThreshold),
+                    reservationInfo["releaseDelta"],
+                    reservationInfo["releaseState"]])
+                out.append(
+                    "    releaseCmp: prog=%.9f release=%.9f stop=%.9f absDelta=%.9g exact=%s eps1e-6=%s eps1e-5=%s stopExact=%s stopEps1e-6=%s" % [
+                    car.progress,
+                    releaseThreshold,
+                    stopThreshold,
+                    reservationInfo["releaseAbsDelta"],
+                    str(reservationInfo["releaseExactPass"]),
+                    str(reservationInfo["releaseSmallEpsPass"]),
+                    str(reservationInfo["releaseLargeEpsPass"]),
+                    str(reservationInfo["stopExactPass"]),
+                    str(reservationInfo["stopSmallEpsPass"])])
+            elif reservationInfo["scope"] == "current_intersection":
+                out.append("    reservationScope: current_intersection state=%s" % [
+                        reservationInfo["releaseState"]])
         else:
             out.append("    reservation: none")
-        var lockOwner: Traffic.Car = _traffic._intersectionLocks.get(lightKey, null)
+        var lockOwner: Traffic.Car = _traffic._getIntersectionLockOwner(lightKey)
         if lockOwner != null:
             out.append("    lockOwner: seg=(v%d,h%d)→(v%d,h%d) prog=%.4f self=%s" % [
                     lockOwner.fromVertStreet, lockOwner.fromHorzStreet,
                     lockOwner.toVertStreet, lockOwner.toHorzStreet,
                     lockOwner.progress, str(lockOwner == car)])
+            if lockOwner != car:
+                var ownerTarget := Vector2i(lockOwner.toVertStreet, lockOwner.toHorzStreet)
+                var ownerLockOwner: Traffic.Car = _traffic._getIntersectionLockOwner(ownerTarget)
+                var ownerReservationInfo: Dictionary = _getReservationDebugInfo(lockOwner)
+                out.append(
+                        "    lockChain: ownerTarget=%s ownerRes=%s ownerState=%s mutual=%s" % [
+                        _intersectionLabel(ownerTarget),
+                        _intersectionLabel(lockOwner.reservedIntersection),
+                        ownerReservationInfo["releaseState"],
+                        str(ownerLockOwner == car)])
+                if ownerReservationInfo["scope"] == "previous_intersection":
+                    out.append(
+                            "    lockChainRelease: ownerDelta=%.6f ownerHeld=%s" % [
+                            ownerReservationInfo["releaseDelta"],
+                            str(ownerReservationInfo["holds"])])
+                    out.append(
+                            "    lockChainCmp: ownerAbsDelta=%.9g ownerExact=%s ownerEps1e-6=%s ownerEps1e-5=%s" % [
+                            ownerReservationInfo["releaseAbsDelta"],
+                            str(ownerReservationInfo["releaseExactPass"]),
+                            str(ownerReservationInfo["releaseSmallEpsPass"]),
+                            str(ownerReservationInfo["releaseLargeEpsPass"])])
         else:
             out.append("    lockOwner: none")
 
-        var stopT: float = maxf(0.0, 1.0 - Traffic.StopOffset / car.segLength)
+        var stopT: float = _traffic._getStopLineProgress(car.segLength)
         var brakeStartT: float = stopT - Traffic.BrakingDistance / car.segLength
         var projectedProgress: float = car.progress \
             + maxf(car.currentSpeed, car.desiredSpeed) * _traffic._lastDelta / car.segLength
@@ -156,7 +280,7 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
         elif not needsIntersectionControl:
             intCheckStatus = "no(stopline)"
         else:
-            var locker: Traffic.Car = _traffic._intersectionLocks.get(lightKey, null)
+            var locker: Traffic.Car = _traffic._getIntersectionLockOwner(lightKey)
             if locker != null and locker != car:
                 intersectionBlocked = true
                 intCheckStatus = "locked"
@@ -249,7 +373,7 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
             if tail == null:
                 out.append("      depart (%d,%d)→(%d,%d): empty" % [key.x, key.y, key.z, key.w])
             else:
-                var bT: float = Traffic.IntersectionBoxDepth / tail.segLength
+                var bT: float = _traffic._getIntersectionBoxProgress(tail.segLength)
                 out.append(
                         ("      depart (%d,%d)→(%d,%d): tail.prog=%.4f spd=%.2f" \
                         + " boxThresh=%.4f inBox=%s moving=%s → %s") % [
@@ -263,7 +387,7 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
             if front == null:
                 out.append("      arrive (%d,%d)→(%d,%d): empty" % [key.x, key.y, key.z, key.w])
             else:
-                var slT: float = 1.0 - Traffic.StopOffset / front.segLength
+                var slT: float = _traffic._getStopLineProgress(front.segLength)
                 var pastStop: bool = front.progress >= slT
                 out.append(
                         ("      arrive (%d,%d)→(%d,%d): front.prog=%.4f spd=%.2f" \
@@ -310,6 +434,54 @@ func debugCarsNear(worldPos: Vector2, radius: float) -> void:
                         other.progress, other.currentSpeed])
                 anyOverlap = true
     if not anyOverlap:
+        out.append("  none")
+
+    out.append("")
+    out.append("--- Lock Cycles ---")
+    var anyCycle: bool = false
+    var seenCycles: Dictionary = {}
+    for car: Traffic.Car in nearby:
+        var lightKey := Vector2i(car.toVertStreet, car.toHorzStreet)
+        var lockOwner: Traffic.Car = _traffic._getIntersectionLockOwner(lightKey)
+        if lockOwner == null or lockOwner == car:
+            continue
+        var ownerTarget := Vector2i(lockOwner.toVertStreet, lockOwner.toHorzStreet)
+        if _traffic._getIntersectionLockOwner(ownerTarget) != car:
+            continue
+        var carId: int = car.get_instance_id()
+        var ownerId: int = lockOwner.get_instance_id()
+        var cycleKey: String = "%d:%d" % [mini(carId, ownerId), maxi(carId, ownerId)]
+        if seenCycles.has(cycleKey):
+            continue
+        seenCycles[cycleKey] = true
+        anyCycle = true
+        var carReservationInfo: Dictionary = _getReservationDebugInfo(car)
+        var ownerReservationInfo: Dictionary = _getReservationDebugInfo(lockOwner)
+        var epsilonCycle: bool = carReservationInfo["releaseRuntimePass"] \
+            and ownerReservationInfo["releaseRuntimePass"] \
+            and not carReservationInfo["releaseExactPass"] \
+            and not ownerReservationInfo["releaseExactPass"]
+        out.append("  mutual_lock: %s target=%s  ↔  %s target=%s" % [
+                _carLabel(car), _intersectionLabel(lightKey),
+                _carLabel(lockOwner), _intersectionLabel(ownerTarget)])
+        out.append(
+                "    A release=%s delta=%.6f held=%s  B release=%s delta=%.6f held=%s" % [
+                carReservationInfo["releaseState"],
+                carReservationInfo["releaseDelta"],
+                str(carReservationInfo["holds"]),
+                ownerReservationInfo["releaseState"],
+                ownerReservationInfo["releaseDelta"],
+                str(ownerReservationInfo["holds"])])
+        out.append(
+                "    cycleCmp: epsilonDeadlock=%s A(abs=%.9g exact=%s eps1e-6=%s) B(abs=%.9g exact=%s eps1e-6=%s)" % [
+                str(epsilonCycle),
+                carReservationInfo["releaseAbsDelta"],
+                str(carReservationInfo["releaseExactPass"]),
+                str(carReservationInfo["releaseSmallEpsPass"]),
+                ownerReservationInfo["releaseAbsDelta"],
+                str(ownerReservationInfo["releaseExactPass"]),
+                str(ownerReservationInfo["releaseSmallEpsPass"])])
+    if not anyCycle:
         out.append("  none")
 
     out.append("")
