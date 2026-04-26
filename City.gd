@@ -42,7 +42,6 @@ var _rowHeights: Array[float] = []
 
 var zones: Array = []
 var colors: Array = []
-var details: Array = []
 var parcelOwner: Array = []
 var parcelExtent: Array = []
 

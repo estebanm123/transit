@@ -105,7 +105,6 @@ func _buildMap(city: City) -> void:
 	var centerRow: float = (City.Rows - 1) / 2.0
 	city.zones = []
 	city.colors = []
-	city.details = []
 	city.parcelOwner = []
 	city.parcelExtent = []
 
@@ -263,44 +262,6 @@ func _buildMap(city: City) -> void:
 							city.parcelOwner[r][c2] = Vector2i(col, row)
 					city.parcelExtent[row][col] = Vector2i(maxCol, maxRow)
 
-	for row in City.Rows:
-		var detailRow: Array = []
-		for col in City.Cols:
-			if city.parcelOwner[row][col] != Vector2i(col, row):
-				detailRow.append({})
-				continue
-			var dx: float = col - centerCol
-			var dy: float = row - centerRow
-			var dist: float = sqrt(dx * dx + dy * dy)
-			var zone: int = city.zones[row][col]
-			var isOffice: bool = (zone == Zone.OfficeIndustry and dist < comCore)
-			var nearCommercial: bool = false
-			if zone == Zone.Residential:
-				var neighbors: Array[Vector2i] = [
-					Vector2i(col - 1, row), Vector2i(col + 1, row),
-					Vector2i(col, row - 1), Vector2i(col, row + 1),
-				]
-				for neighbor: Vector2i in neighbors:
-					if neighbor.x >= 0 and neighbor.x < City.Cols \
-							and neighbor.y >= 0 and neighbor.y < City.Rows \
-							and city.zones[neighbor.y][neighbor.x] == Zone.Commercial:
-						nearCommercial = true
-						break
-			var effectiveDist: float = dist
-			for cbd: Dictionary in _secondaryCbds:
-				var secDist: float = _secondaryCbdDist(col, row, cbd)
-				if secDist < cbd.fringeR:
-					effectiveDist = min(effectiveDist,
-							secDist * 5.5 / max(0.01, cbd.fringeR))
-					if zone == Zone.OfficeIndustry and secDist < cbd.coreR:
-						isOffice = true
-					break
-			detailRow.append(_genDetails(
-					zone, city.colors[row][col], city.mergedBlockRect(col, row),
-					effectiveDist, isOffice, nearCommercial))
-		city.details.append(detailRow)
-
-
 func _secondaryCbdDist(col: int, row: int, cbd: Dictionary) -> float:
 	var dx: float = float(col) - cbd.center.x
 	var dy: float = float(row) - cbd.center.y
@@ -409,115 +370,3 @@ func _isInsideCity(col: int, row: int) -> bool:
 		if normalizedDist < 0.55 + 0.18 * influence:
 			return true
 	return false
-
-
-func _genDetails(zone: int, _color: Color, rect: Rect2, dist: float = 0.0,
-		isOffice: bool = false, nearCommercial: bool = false) -> Dictionary:
-	var tileScale: float = sqrt(rect.get_area()) / 7.5
-	var result: Dictionary = {}
-
-	match zone:
-		Zone.Park:
-			var trees: Array = []
-			for _i in rng.randi_range(
-					max(1, int(2.0 * tileScale)), max(1, int(6.0 * tileScale))):
-				trees.append({
-					"p": Vector2(
-						rect.position.x + rng.randf_range(3.0, max(3.0, rect.size.x - 3.0)),
-						rect.position.y + rng.randf_range(3.0, max(3.0, rect.size.y - 3.0))),
-					"r": rng.randf_range(1.5, 4.0),
-				})
-			result["trees"] = trees
-
-		Zone.Residential:
-			var floors: int
-			if dist < 3.0:
-				floors = rng.randi_range(6, 10)
-			elif dist < 6.0:
-				if nearCommercial and rng.randf() < 0.50:
-					floors = rng.randi_range(6, 10)
-				elif rng.randf() < 0.08:
-					floors = rng.randi_range(6, 10)
-				else:
-					floors = rng.randi_range(3, 5)
-			else:
-				if nearCommercial and rng.randf() < 0.50:
-					floors = rng.randi_range(6, 10)
-				elif rng.randf() < 0.05:
-					floors = rng.randi_range(6, 10)
-				else:
-					floors = 1
-			result["density"] = floors
-			var buildings: Array = []
-			if floors == 1:
-				for _i in rng.randi_range(
-						max(1, int(1.0 * tileScale)), max(1, int(3.0 * tileScale))):
-					var bldWidth: float = rng.randf_range(
-							5.0, max(5.0, min(9.0, rect.size.x * 0.28)))
-					var bldHeight: float = rng.randf_range(
-							6.0, max(6.0, min(10.0, rect.size.y * 0.28)))
-					buildings.append(Rect2(
-						rect.position.x + rng.randf_range(
-								0.5, max(0.5, rect.size.x - bldWidth - 0.5)),
-						rect.position.y + rng.randf_range(
-								0.5, max(0.5, rect.size.y - bldHeight - 0.5)),
-						bldWidth, bldHeight))
-			else:
-				var towerHeight: float = min(float(floors) * 2.7 + 1.5, rect.size.y - 4.0)
-				for _i in rng.randi_range(
-						max(1, int(1.0 * tileScale)), max(1, int(3.0 * tileScale))):
-					var bldWidth: float = rng.randf_range(3.5, min(8.0, rect.size.x * 0.28))
-					buildings.append(Rect2(
-						rect.position.x + rng.randf_range(
-								2.0, max(2.0, rect.size.x - bldWidth - 2.0)),
-						rect.position.y + rng.randf_range(
-								2.0, max(2.0, rect.size.y - towerHeight - 2.0)),
-						bldWidth, towerHeight))
-			result["blds"] = buildings
-
-		Zone.HighDensityResidential:
-			var floors: int = rng.randi_range(6, 10)
-			result["density"] = floors
-			var towerHeight: float = min(float(floors) * 2.7 + 1.5, rect.size.y - 4.0)
-			var buildings: Array = []
-			for _i in rng.randi_range(
-					max(1, int(1.0 * tileScale)), max(1, int(3.0 * tileScale))):
-				var bldWidth: float = rng.randf_range(3.5, min(8.0, rect.size.x * 0.28))
-				buildings.append(Rect2(
-						rect.position.x + rng.randf_range(
-								2.0, max(2.0, rect.size.x - bldWidth - 2.0)),
-						rect.position.y + rng.randf_range(
-								2.0, max(2.0, rect.size.y - towerHeight - 2.0)),
-						bldWidth, towerHeight))
-			result["blds"] = buildings
-
-		Zone.Commercial:
-			var buildings: Array = []
-			for _i in rng.randi_range(
-					max(1, int(1.0 * tileScale)), max(1, int(2.0 * tileScale))):
-				var bldWidth: float = rng.randf_range(6.0, min(18.0, rect.size.x * 0.55))
-				var bldHeight: float = rng.randf_range(
-						4.0, min(rect.size.y * 0.80, rect.size.y - 3.0))
-				buildings.append(Rect2(
-					rect.position.x + rng.randf_range(
-							1.5, max(1.5, rect.size.x - bldWidth - 1.5)),
-					rect.position.y + rng.randf_range(
-							1.5, max(1.5, rect.size.y - bldHeight - 1.5)),
-					bldWidth, bldHeight))
-			result["blds"] = buildings
-
-		Zone.OfficeIndustry:
-			var buildings: Array = []
-			for _i in rng.randi_range(
-					max(1, int(1.0 * tileScale)), max(1, int(2.0 * tileScale))):
-				var bldWidth: float = rng.randf_range(9.0, min(27.0, rect.size.x * 0.70))
-				var bldHeight: float = rng.randf_range(5.5, min(20.0, rect.size.y * 0.60))
-				buildings.append(Rect2(
-					rect.position.x + rng.randf_range(
-							1.5, max(1.5, rect.size.x - bldWidth - 1.5)),
-					rect.position.y + rng.randf_range(
-							1.5, max(1.5, rect.size.y - bldHeight - 1.5)),
-					bldWidth, bldHeight))
-			result["blds"] = buildings
-
-	return result
