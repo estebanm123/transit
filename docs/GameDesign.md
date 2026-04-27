@@ -18,7 +18,7 @@ Abilities consume 3 resources
 
 Examples:
 - 50K$ Marketing campaign (reduce car usage in area by very small amount)
-- 20K$ Add bus stop (reduce bus speed and car usage in area)
+- 20K$ Add bus stop (reduce bus speed + car usage)
 - 500K$ Add a bus (reduce car usage in area)
 - 100M$ Extend subway by 1KM
 - 50M$ Build a new subway stop 
@@ -28,13 +28,15 @@ Examples:
 - ?$ Build a car tunnel
 - ?$ Traffic light efficiency survey
 - ?$ Congestion charge/toll
-- ?$ TODO: when rivers are implemented, build bridge
+- ?$ (FUTURE: when rivers are implemented), build bridge
 
-Bus/tram/subway/commuter abilities are known as 'transport' abilities. Their effects are based on where they're deployed to (ie. where the stations are). TODO: maybe create a simplified heatmap view to help users analyze ideal line placements.
+Bus/tram/subway/commuter abilities are known as 'transport' abilities. Their effects are based on where they're deployed to (ie. where the stations are) and the transit needs of the population residing in that area. Adding a new vehicle or station will lead to more of the population using that transport mode (instead of car or an alternative transport) if it shortens their commute.
+FUTURE: maybe create a simplified heatmap view to help users analyze ideal line placements.
 
 Transport lines are dynamically generated when you add your first bus/tram/subway/commuter stop or vehicle. When adding your next line or vehicle you have the option of creating a new line or adding the station/vehicle to an existing line.
 
 TODO: how to restrict access to the gameplay modifiers? Having them all available at once may be overwhelming for the user and impede run variety. How could player acquire them over the course of their run?
+TODO: need to represent commute time for general population instead of being based on cars. Probably need to create a system where each household tracks their commute duration so we know when to switch it.
 
 ## Policies
 These are permanent gameplay modifiers you collect (or may lose in events).
