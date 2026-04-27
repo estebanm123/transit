@@ -2,6 +2,8 @@ class_name Main extends Node2D
 
 const ZoomMin: float = 0.15
 const ZoomMax: float = 5.0
+const SimulationRateNormal: int = 1
+const SimulationRateMax: int = 8
 
 var _generator: CityGenerator
 var _city: City
@@ -17,10 +19,15 @@ var _trafficLayer: TrafficLayer
 var _debugger: TrafficDebugger
 var _hudNode: Node2D
 var _fpsLabel: Label
+var _commuteLabel: Label
+var _controlsContainer: HBoxContainer
+var _speedButton: Button
+var _congestedButton: Button
 var _debugShiftHeld: bool = false
 var _debugMouseScreenPos: Vector2 = Vector2.ZERO
 var _debugRadius: float = 16.7
 var _paused: bool = false
+var _simulationRate: int = SimulationRateNormal
 
 
 func _ready() -> void:
@@ -47,23 +54,63 @@ func _ready() -> void:
     _fpsLabel.position = Vector2(8.0, 8.0)
     hudCanvas.add_child(_fpsLabel)
 
+    _commuteLabel = Label.new()
+    _commuteLabel.position = Vector2(8.0, 64.0)
+    hudCanvas.add_child(_commuteLabel)
+
+    _controlsContainer = HBoxContainer.new()
+    _controlsContainer.position = Vector2(8.0, 36.0)
+    _controlsContainer.add_theme_constant_override("separation", 8)
+    hudCanvas.add_child(_controlsContainer)
+
+    _speedButton = Button.new()
+    _speedButton.pressed.connect(_incrementSimulationRate)
+    _controlsContainer.add_child(_speedButton)
+
+    _congestedButton = Button.new()
+    _congestedButton.text = "Congested Start (C)"
+    _congestedButton.pressed.connect(_generateCongestedCity)
+    _controlsContainer.add_child(_congestedButton)
+
     get_viewport().size_changed.connect(queue_redraw)
     get_viewport().size_changed.connect(_hudNode.queue_redraw)
 
     _generateCity()
+    _updateSpeedButton()
     queue_redraw()
     _hudNode.queue_redraw()
 
 
-func _generateCity() -> void:
+func _generateCity(startCongested: bool = false) -> void:
     _city = _generator.generate()
     _traffic = Traffic.new()
-    _traffic.init(_city)
+    _traffic.init(_city, startCongested)
     _cityLayer.setup(_city)
     _trafficLayer.setup(_traffic, _city)
+    _trafficLayer.simulationRate = _simulationRate
     _debugger = TrafficDebugger.new()
     _debugger.init(_traffic)
     _updateLayerTransforms()
+
+
+func _incrementSimulationRate() -> void:
+    if _simulationRate >= SimulationRateMax:
+        _simulationRate = SimulationRateNormal
+    else:
+        _simulationRate *= 2
+    _trafficLayer.simulationRate = _simulationRate
+    _updateSpeedButton()
+    _hudNode.queue_redraw()
+
+
+func _generateCongestedCity() -> void:
+    _generateCity(true)
+    queue_redraw()
+    _hudNode.queue_redraw()
+
+
+func _updateSpeedButton() -> void:
+    _speedButton.text = "Speed x%d (F)" % _simulationRate
 
 
 func _updateLayerTransforms() -> void:
@@ -75,6 +122,8 @@ func _updateLayerTransforms() -> void:
 
 func _process(_delta: float) -> void:
     _fpsLabel.text = "FPS: %d" % Engine.get_frames_per_second()
+    if _traffic != null:
+        _commuteLabel.text = "Commute happiness: %.1f / 10" % _traffic.getCommuteHappiness()
     var shiftNow: bool = Input.is_key_pressed(KEY_SHIFT)
     if shiftNow != _debugShiftHeld:
         _debugShiftHeld = shiftNow
@@ -88,6 +137,8 @@ func _process(_delta: float) -> void:
 
 func _input(event: InputEvent) -> void:
     if event is InputEventMouseButton:
+        if _controlsContainer.get_global_rect().has_point(event.position):
+            return
         match event.button_index:
             MOUSE_BUTTON_LEFT:
                 if event.pressed and event.shift_pressed:
@@ -134,6 +185,11 @@ func _input(event: InputEvent) -> void:
             KEY_R:
                 _generator.rng.seed = _generator.rng.randi()
                 _generateCity()
+            KEY_F:
+                _incrementSimulationRate()
+            KEY_C:
+                _generator.rng.seed = _generator.rng.randi()
+                _generateCongestedCity()
 
 
 func _zoomAt(screenPos: Vector2, factor: float) -> void:
@@ -160,7 +216,9 @@ func _drawLegend() -> void:
 
     var items: Array = [
         {"c": City.CPark,   "lbl": "Park"},
-        {"c": City.CRes[2], "lbl": "Residential"},
+        {"c": City.CRes[0], "lbl": "Residential"},
+        {"c": City.CRes[2], "lbl": "Medium Residential"},
+        {"c": City.CRes[3], "lbl": "High-rise Residential"},
         {"c": City.CCom[0], "lbl": "Commercial"},
         {"c": City.CInd[1], "lbl": "Office/Industry"},
     ]

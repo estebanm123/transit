@@ -1,5 +1,10 @@
 class_name CityGenerator extends RefCounted
 
+const MediumDensityRandomChance: float = 0.018
+const HighRiseRandomChance: float = 0.003
+const MediumDensityCoreDistance: float = 5.0
+const HighRiseCoreDistance: float = 2.0
+
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _numArms: int = 0
 var _armAngles: Array[float] = []
@@ -199,15 +204,14 @@ func _buildMap(city: City) -> void:
 							secDist * 5.5 / max(0.01, cbd.fringeR))
 					break
 
-			if zone == Zone.Residential and effectiveDistColor < 2.0:
-				zone = Zone.HighDensityResidential
+			if zone == Zone.Residential:
+				zone = _pickResidentialDensity(effectiveDistColor)
 			var baseColor: Color
 			match zone:
 				Zone.Park:
 					baseColor = City.CPark
-				Zone.Residential, Zone.HighDensityResidential:
-					var idx: int = clamp(int(effectiveDistColor), 0, City.CRes.size() - 1)
-					baseColor = City.CRes[City.CRes.size() - 1 - idx]
+				Zone.Residential, Zone.MediumDensityResidential, Zone.HighDensityResidential:
+					baseColor = _residentialColor(zone, effectiveDistColor)
 				Zone.Commercial:
 					baseColor = City.CCom[rng.randi() % City.CCom.size()]
 				Zone.OfficeIndustry:
@@ -261,6 +265,27 @@ func _buildMap(city: City) -> void:
 							city.colors[r][c2] = baseColor
 							city.parcelOwner[r][c2] = Vector2i(col, row)
 					city.parcelExtent[row][col] = Vector2i(maxCol, maxRow)
+
+
+func _pickResidentialDensity(effectiveDistColor: float) -> int:
+	var roll: float = rng.randf()
+	if effectiveDistColor < HighRiseCoreDistance or roll < HighRiseRandomChance:
+		return Zone.HighDensityResidential
+	if effectiveDistColor < MediumDensityCoreDistance or roll < MediumDensityRandomChance:
+		return Zone.MediumDensityResidential
+	return Zone.Residential
+
+
+func _residentialColor(zone: int, effectiveDistColor: float) -> Color:
+	match zone:
+		Zone.HighDensityResidential:
+			return City.CRes[3]
+		Zone.MediumDensityResidential:
+			return City.CRes[2]
+		_:
+			var idx: int = clamp(int(effectiveDistColor), 0, City.CRes.size() - 1)
+			return City.CRes[City.CRes.size() - 1 - idx]
+
 
 func _secondaryCbdDist(col: int, row: int, cbd: Dictionary) -> float:
 	var dx: float = float(col) - cbd.center.x
