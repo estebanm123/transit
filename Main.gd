@@ -20,6 +20,7 @@ var _debugger: TrafficDebugger
 var _hudNode: Node2D
 var _fpsLabel: Label
 var _commuteLabel: Label
+var _transportDistributionLabel: Label
 var _controlsContainer: HBoxContainer
 var _speedButton: Button
 var _congestedButton: Button
@@ -57,6 +58,10 @@ func _ready() -> void:
     _commuteLabel = Label.new()
     _commuteLabel.position = Vector2(8.0, 64.0)
     hudCanvas.add_child(_commuteLabel)
+
+    _transportDistributionLabel = Label.new()
+    _transportDistributionLabel.position = Vector2(8.0, 86.0)
+    hudCanvas.add_child(_transportDistributionLabel)
 
     _controlsContainer = HBoxContainer.new()
     _controlsContainer.position = Vector2(8.0, 36.0)
@@ -120,10 +125,21 @@ func _updateLayerTransforms() -> void:
     _trafficLayer.scale = Vector2(_zoom, _zoom)
 
 
+func _getTransportDistributionText() -> String:
+    var distribution: Dictionary = _city.getOverallTransportDistribution()
+    return "Transport modes: Cars %.0f%%  Bikes %.0f%%  Walking %.0f%%" % [
+        distribution.get(City.TransportCar, 0.0) * 100.0,
+        distribution.get(City.TransportBike, 0.0) * 100.0,
+        distribution.get(City.TransportWalk, 0.0) * 100.0,
+    ]
+
+
 func _process(_delta: float) -> void:
     _fpsLabel.text = "FPS: %d" % Engine.get_frames_per_second()
     if _traffic != null:
         _commuteLabel.text = "Commute happiness: %.1f / 10" % _traffic.getCommuteHappiness()
+    if _city != null:
+        _transportDistributionLabel.text = _getTransportDistributionText()
     var shiftNow: bool = Input.is_key_pressed(KEY_SHIFT)
     if shiftNow != _debugShiftHeld:
         _debugShiftHeld = shiftNow

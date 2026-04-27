@@ -14,6 +14,14 @@ const CCountryside: Color = Palette.CGreenDark
 const CStreet: Color = Palette.CGrayDeep
 
 const CPark: Color = Palette.CGreen
+const TransportCar: String = "car"
+const TransportBike: String = "bike"
+const TransportWalk: String = "walk"
+const TransportModes: Array[String] = [
+	TransportCar,
+	TransportBike,
+	TransportWalk,
+]
 
 const CRes: Array[Color] = [
 	Palette.CBlueDark,
@@ -33,6 +41,13 @@ const CInd: Array[Color] = [
 	Palette.CGrayMid,
 ]
 
+
+class TileCommuteProfile extends RefCounted:
+	var population: int = 0
+	var commuteCostByMode: Dictionary = {}
+	var transportDistribution: Dictionary = {}
+
+
 var vertStreetWidths: Array[float] = []
 var horzStreetWidths: Array[float] = []
 var _colXPositions: Array[float] = []
@@ -44,6 +59,8 @@ var zones: Array = []
 var colors: Array = []
 var parcelOwner: Array = []
 var parcelExtent: Array = []
+var commuteProfiles: Array = []
+var totalPopulation: int = 0
 
 
 func blockRect(col: int, row: int) -> Rect2:
@@ -57,3 +74,33 @@ func mergedBlockRect(col: int, row: int) -> Rect2:
 	var w: float = _colXPositions[extent.x] + _colWidths[extent.x] - x
 	var h: float = _rowYPositions[extent.y] + _rowHeights[extent.y] - y
 	return Rect2(x, y, w, h)
+
+
+func getCommuteProfile(col: int, row: int) -> TileCommuteProfile:
+	if row < 0 or row >= commuteProfiles.size():
+		return null
+	if col < 0 or col >= commuteProfiles[row].size():
+		return null
+	return commuteProfiles[row][col]
+
+
+func getOverallTransportDistribution() -> Dictionary:
+	var totals: Dictionary = {
+		TransportCar: 0.0,
+		TransportBike: 0.0,
+		TransportWalk: 0.0,
+	}
+	var tripTotal: float = 0.0
+	for row in commuteProfiles:
+		for profile: TileCommuteProfile in row:
+			if profile == null:
+				continue
+			var population: float = float(profile.population)
+			tripTotal += population
+			for mode: String in TransportModes:
+				totals[mode] += population * profile.transportDistribution.get(mode, 0.0)
+	if tripTotal <= 0.0:
+		return totals
+	for mode: String in TransportModes:
+		totals[mode] /= tripTotal
+	return totals

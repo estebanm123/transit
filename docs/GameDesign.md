@@ -10,13 +10,15 @@ You are given a $ budget that replenishes by a set amount weekly.
 ## Abilities
 Each week after your budget replenishes, you may enact gameplay modifiers known as abilities.
 
+You may only choose from a limited set of abilities recommended by your advisors (selection initially random but could be influenced by other factors?).
+
+?? After x weeks you may choose to hire a new advisor to acquire new abilities from a limited pool.
+
 Abilities consume 3 resources
 - Upfront cost
-- Operating cost? TODO figure out how to do without overcomplicating
-	- Consider this to be a type of ability in of itself? eg. bus/tram/subway/commuter maintance 
-- Implementation duration in weeks.
+- Operating cost [optional]
 
-Examples:
+Ability examples:
 - 50K$ Marketing campaign (reduce car usage in area by very small amount)
 - 20K$ Add bus stop (reduce bus speed + car usage)
 - 500K$ Add a bus (reduce car usage in area)
@@ -25,7 +27,9 @@ Examples:
 - ?$ Build bike lane (variants: painted vs protected [reduces car lane])
 - ?$ Bus priority lane (car usage drops, but may increase car congestion)
 - ?$ Add a car lane (car usage increases a bit?, congestion reduces in unrelated area, and is transferred to where car lane is added)
-- ?$ Build a car tunnel
+- ?$ Build a car tunnel 1KM
+- ?$ Build a pedestrian overpass
+- ?$ Build a pedestrian greenway
 - ?$ Traffic light efficiency survey
 - ?$ Congestion charge/toll
 - ?$ (FUTURE: when rivers are implemented), build bridge
@@ -35,11 +39,15 @@ FUTURE: maybe create a simplified heatmap view to help users analyze ideal line 
 
 Transport lines are dynamically generated when you add your first bus/tram/subway/commuter stop or vehicle. When adding your next line or vehicle you have the option of creating a new line or adding the station/vehicle to an existing line.
 
-TODO: how to restrict access to the gameplay modifiers? Having them all available at once may be overwhelming for the user and impede run variety. How could player acquire them over the course of their run?
-TODO: need to represent commute time for general population instead of being based on cars. Probably need to create a system where each household tracks their commute duration so we know when to switch it.
+Commute demand is represented per residential land-use tile. Each low, medium, and
+high-density residential tile generates a population, commute cost by mode, and
+transport mode split for trips originating from that tile. City-wide transport
+mode share is population-weighted across those tiles.
 
 ## Policies
 These are permanent gameplay modifiers you collect (or may lose in events).
+
+Every 8 weeks, the player can choose from certain policies to enact. Policies may also be enacted via events.
 
 - Fuel tax
 - Congestion charge

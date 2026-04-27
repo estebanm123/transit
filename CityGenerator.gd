@@ -4,6 +4,13 @@ const MediumDensityRandomChance: float = 0.018
 const HighRiseRandomChance: float = 0.003
 const MediumDensityCoreDistance: float = 5.0
 const HighRiseCoreDistance: float = 2.0
+const WalkBaseShareMax: float = 0.05
+const WalkParkBonusMax: float = 0.10
+const BikeBaseShareMax: float = 0.05
+const BikeCityBonusMax: float = 0.10
+const ParkFullBonusRatio: float = 0.15
+const HighDensityFullBonusRatio: float = 0.35
+const ActiveTransportShareMax: float = 0.30
 
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 var _numArms: int = 0
@@ -112,6 +119,8 @@ func _buildMap(city: City) -> void:
 	city.colors = []
 	city.parcelOwner = []
 	city.parcelExtent = []
+	city.commuteProfiles = []
+	city.totalPopulation = 0
 
 	var cityParkRatio: float = rng.randf_range(0.0, 0.043)
 	var cityIndRatio: float = rng.randf_range(0.0, 0.04)
@@ -266,6 +275,8 @@ func _buildMap(city: City) -> void:
 							city.parcelOwner[r][c2] = Vector2i(col, row)
 					city.parcelExtent[row][col] = Vector2i(maxCol, maxRow)
 
+	_assignResidentialCommuteProfiles(city)
+
 
 func _pickResidentialDensity(effectiveDistColor: float) -> int:
 	var roll: float = rng.randf()
@@ -285,6 +296,117 @@ func _residentialColor(zone: int, effectiveDistColor: float) -> Color:
 		_:
 			var idx: int = clamp(int(effectiveDistColor), 0, City.CRes.size() - 1)
 			return City.CRes[City.CRes.size() - 1 - idx]
+
+
+func _assignResidentialCommuteProfiles(city: City) -> void:
+	var parkTileCount: int = 0
+	var developedTileCount: int = 0
+	var residentialTileCount: int = 0
+	var highDensityTileCount: int = 0
+
+	city.commuteProfiles.clear()
+	for row in City.Rows:
+		var commuteRow: Array = []
+		for col in City.Cols:
+			commuteRow.append(null)
+			var zone: int = city.zones[row][col]
+			if zone == Zone.Empty:
+				continue
+			developedTileCount += 1
+			if zone == Zone.Park:
+				parkTileCount += 1
+			if _isResidentialZone(zone):
+				residentialTileCount += 1
+				if zone == Zone.HighDensityResidential:
+					highDensityTileCount += 1
+		city.commuteProfiles.append(commuteRow)
+
+	var parkRatio: float = float(parkTileCount) / maxf(1.0, float(developedTileCount))
+	var highDensityRatio: float = float(highDensityTileCount) \
+			/ maxf(1.0, float(residentialTileCount))
+	var parkInfluence: float = clampf(parkRatio / ParkFullBonusRatio, 0.0, 1.0)
+	var highDensityInfluence: float = clampf(
+			highDensityRatio / HighDensityFullBonusRatio, 0.0, 1.0)
+	var cityWalkShare: float = rng.randf_range(0.0, WalkBaseShareMax) \
+			+ parkInfluence * WalkParkBonusMax
+	var cityBikeShare: float = rng.randf_range(0.0, BikeBaseShareMax) \
+			+ (parkInfluence + highDensityInfluence) * 0.5 * BikeCityBonusMax
+	var cityCenter: Vector2 = Vector2((City.Cols - 1) * 0.5, (City.Rows - 1) * 0.5)
+
+	for row in City.Rows:
+		for col in City.Cols:
+			if city.parcelOwner[row][col] != Vector2i(col, row):
+				continue
+			var zone: int = city.zones[row][col]
+			if not _isResidentialZone(zone):
+				continue
+			var profile: City.TileCommuteProfile = City.TileCommuteProfile.new()
+			profile.population = _residentialPopulation(zone)
+			profile.commuteCostByMode = _commuteCostsForTile(col, row, zone, cityCenter)
+			profile.transportDistribution = _initialTransportDistribution(
+					zone, cityWalkShare, cityBikeShare)
+			city.commuteProfiles[row][col] = profile
+			city.totalPopulation += profile.population
+
+
+func _isResidentialZone(zone: int) -> bool:
+	return zone == Zone.Residential \
+			or zone == Zone.MediumDensityResidential \
+			or zone == Zone.HighDensityResidential
+
+
+func _residentialPopulation(zone: int) -> int:
+	match zone:
+		Zone.MediumDensityResidential:
+			return rng.randi_range(100, 400)
+		Zone.HighDensityResidential:
+			return rng.randi_range(400, 800)
+		_:
+			return rng.randi_range(10, 100)
+
+
+func _commuteCostsForTile(col: int, row: int, zone: int, cityCenter: Vector2) -> Dictionary:
+	var distanceFromCenter: float = Vector2(col, row).distance_to(cityCenter)
+	var densityMultiplier: float = 1.0
+	match zone:
+		Zone.MediumDensityResidential:
+			densityMultiplier = 0.9
+		Zone.HighDensityResidential:
+			densityMultiplier = 0.8
+	return {
+		City.TransportCar: 8.0 + distanceFromCenter * 0.75 * densityMultiplier,
+		City.TransportBike: 5.0 + distanceFromCenter * 1.25 * densityMultiplier,
+		City.TransportWalk: 4.0 + distanceFromCenter * 3.0 * densityMultiplier,
+	}
+
+
+func _initialTransportDistribution(zone: int, cityWalkShare: float,
+		cityBikeShare: float) -> Dictionary:
+	var walkMultiplier: float = 0.85
+	var bikeMultiplier: float = 0.9
+	match zone:
+		Zone.MediumDensityResidential:
+			walkMultiplier = 1.0
+			bikeMultiplier = 1.0
+		Zone.HighDensityResidential:
+			walkMultiplier = 1.15
+			bikeMultiplier = 1.1
+	var walkShare: float = clampf(
+			cityWalkShare * walkMultiplier + rng.randf_range(-0.01, 0.01),
+			0.0, WalkBaseShareMax + WalkParkBonusMax)
+	var bikeShare: float = clampf(
+			cityBikeShare * bikeMultiplier + rng.randf_range(-0.01, 0.01),
+			0.0, BikeBaseShareMax + BikeCityBonusMax)
+	var activeShare: float = walkShare + bikeShare
+	if activeShare > ActiveTransportShareMax:
+		var scale: float = ActiveTransportShareMax / activeShare
+		walkShare *= scale
+		bikeShare *= scale
+	return {
+		City.TransportCar: 1.0 - walkShare - bikeShare,
+		City.TransportBike: bikeShare,
+		City.TransportWalk: walkShare,
+	}
 
 
 func _secondaryCbdDist(col: int, row: int, cbd: Dictionary) -> float:
