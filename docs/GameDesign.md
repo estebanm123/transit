@@ -39,6 +39,8 @@ FUTURE: maybe create a simplified heatmap view to help users analyze ideal line 
 
 Transport lines are dynamically generated when you add your first bus/tram/subway/commuter stop or vehicle. When adding your next line or vehicle you have the option of creating a new line or adding the station/vehicle to an existing line.
 
+TODO: Expand bus station car-reduction effects so they are based on bus frequency, not just station distance.
+
 Commute demand is represented per residential land-use tile. Each low, medium, and
 high-density residential tile generates a population, commute cost by mode, and
 transport mode split for trips originating from that tile. City-wide transport

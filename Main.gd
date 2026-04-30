@@ -4,10 +4,14 @@ const ZoomMin: float = 0.15
 const ZoomMax: float = 5.0
 const SimulationRateNormal: int = 1
 const SimulationRateMax: int = 8
+const TileHappyCommuteMinutes: float = 10.0
+const TileMiserableCommuteMinutes: float = 45.0
 
 var _generator: CityGenerator
 var _city: City
 var _traffic: Traffic
+var _transitSystem: TransitSystem
+var _abilityManager: AbilityManager
 var _zoom: float = 1.0
 var _pan: Vector2 = Vector2.ZERO
 var _dragging: bool = false
@@ -21,9 +25,12 @@ var _hudNode: Node2D
 var _fpsLabel: Label
 var _commuteLabel: Label
 var _transportDistributionLabel: Label
+var _hoverTileLabel: Label
+var _abilityStatusLabel: Label
 var _controlsContainer: HBoxContainer
 var _speedButton: Button
 var _congestedButton: Button
+var _abilityButtons: Array[Button] = []
 var _debugShiftHeld: bool = false
 var _debugMouseScreenPos: Vector2 = Vector2.ZERO
 var _debugRadius: float = 16.7
@@ -63,6 +70,13 @@ func _ready() -> void:
     _transportDistributionLabel.position = Vector2(8.0, 86.0)
     hudCanvas.add_child(_transportDistributionLabel)
 
+    _hoverTileLabel = Label.new()
+    hudCanvas.add_child(_hoverTileLabel)
+
+    _abilityStatusLabel = Label.new()
+    _abilityStatusLabel.position = Vector2(8.0, 108.0)
+    hudCanvas.add_child(_abilityStatusLabel)
+
     _controlsContainer = HBoxContainer.new()
     _controlsContainer.position = Vector2(8.0, 36.0)
     _controlsContainer.add_theme_constant_override("separation", 8)
@@ -77,6 +91,10 @@ func _ready() -> void:
     _congestedButton.pressed.connect(_generateCongestedCity)
     _controlsContainer.add_child(_congestedButton)
 
+    _addAbilityButton("Bus Station (B)", "Bus Station")
+    _addAbilityButton("New Bus Line (N)", "New Bus Line")
+    _addAbilityButton("Add Bus (V)", "Add Bus")
+
     get_viewport().size_changed.connect(queue_redraw)
     get_viewport().size_changed.connect(_hudNode.queue_redraw)
 
@@ -89,12 +107,17 @@ func _ready() -> void:
 func _generateCity(startCongested: bool = false) -> void:
     _city = _generator.generate()
     _traffic = Traffic.new()
-    _traffic.init(_city, startCongested)
+    _transitSystem = TransitSystem.new()
+    _transitSystem.init(_city)
+    _traffic.init(_city, _transitSystem, startCongested)
     _cityLayer.setup(_city)
-    _trafficLayer.setup(_traffic, _city)
+    _trafficLayer.setup(_traffic, _city, _transitSystem)
     _trafficLayer.simulationRate = _simulationRate
     _debugger = TrafficDebugger.new()
     _debugger.init(_traffic)
+    _abilityManager = AbilityManager.new()
+    _abilityManager.init(_city, _transitSystem, _traffic)
+    _updateAbilityStatus()
     _updateLayerTransforms()
 
 
@@ -118,6 +141,33 @@ func _updateSpeedButton() -> void:
     _speedButton.text = "Speed x%d (F)" % _simulationRate
 
 
+func _addAbilityButton(buttonText: String, abilityName: String) -> void:
+    var button := Button.new()
+    button.text = buttonText
+    button.pressed.connect(_activateAbilityByName.bind(abilityName))
+    _controlsContainer.add_child(button)
+    _abilityButtons.append(button)
+
+
+func _activateAbilityByName(abilityName: String) -> void:
+    if _abilityManager == null:
+        return
+    _abilityManager.selectAbilityByName(abilityName)
+    if _abilityManager.selectedAbility != null \
+            and not _abilityManager.selectedAbility.requiresTile:
+        _abilityManager.applySelectedAtTile(City.NoTile)
+        _abilityManager.selectedAbility = null
+    _updateAbilityStatus()
+    _trafficLayer.queue_redraw()
+
+
+func _updateAbilityStatus() -> void:
+    if _abilityManager == null or _abilityManager.selectedAbility == null:
+        _abilityStatusLabel.text = ""
+        return
+    _abilityStatusLabel.text = "Placing: %s" % _abilityManager.selectedAbility.displayName
+
+
 func _updateLayerTransforms() -> void:
     _cityLayer.position = _pan
     _cityLayer.scale = Vector2(_zoom, _zoom)
@@ -127,11 +177,58 @@ func _updateLayerTransforms() -> void:
 
 func _getTransportDistributionText() -> String:
     var distribution: Dictionary = _city.getOverallTransportDistribution()
-    return "Transport modes: Cars %.0f%%  Bikes %.0f%%  Walking %.0f%%" % [
+    return "Transport modes: Cars %.0f%%  Bus %.0f%%  Bikes %.0f%%  Walking %.0f%%" % [
         distribution.get(City.TransportCar, 0.0) * 100.0,
+        distribution.get(City.TransportBus, 0.0) * 100.0,
         distribution.get(City.TransportBike, 0.0) * 100.0,
         distribution.get(City.TransportWalk, 0.0) * 100.0,
     ]
+
+
+func _updateHoverTileLabel() -> void:
+    var viewportSize: Vector2 = get_viewport_rect().size
+    _hoverTileLabel.position = Vector2(8.0, viewportSize.y - 58.0)
+    if _city == null:
+        _hoverTileLabel.text = ""
+        return
+    var mouseScreenPos: Vector2 = get_viewport().get_mouse_position()
+    var worldPos: Vector2 = (mouseScreenPos - _pan) / _zoom
+    var tile: Vector2i = _city.getTileAtWorldPosition(worldPos)
+    if tile == City.NoTile:
+        _hoverTileLabel.text = ""
+        return
+    var profile: City.TileCommuteProfile = _city.getCommuteProfile(tile.x, tile.y)
+    if profile == null:
+        _hoverTileLabel.text = ""
+        return
+    var distribution: Dictionary = profile.transportDistribution
+    _hoverTileLabel.text = (
+        "Tile commute: %.1f / 10  Cars %.0f%%  Bus %.0f%%  Bikes %.0f%%  Walking %.0f%%\n"
+        + "Population: %d  Avg commute: %.1f min"
+    ) % [
+        _getTileCommuteHappiness(profile),
+        distribution.get(City.TransportCar, 0.0) * 100.0,
+        distribution.get(City.TransportBus, 0.0) * 100.0,
+        distribution.get(City.TransportBike, 0.0) * 100.0,
+        distribution.get(City.TransportWalk, 0.0) * 100.0,
+        profile.population,
+        _getTileAverageCommuteMinutes(profile),
+    ]
+
+
+func _getTileAverageCommuteMinutes(profile: City.TileCommuteProfile) -> float:
+    var commuteMinutes: float = 0.0
+    for mode: String in City.TransportModes:
+        commuteMinutes += profile.transportDistribution.get(mode, 0.0) \
+                * profile.commuteCostByMode.get(mode, 0.0)
+    return commuteMinutes
+
+
+func _getTileCommuteHappiness(profile: City.TileCommuteProfile) -> float:
+    var commuteMinutes: float = _getTileAverageCommuteMinutes(profile)
+    var t: float = inverse_lerp(
+            TileHappyCommuteMinutes, TileMiserableCommuteMinutes, commuteMinutes)
+    return (1.0 - clampf(t, 0.0, 1.0)) * 10.0
 
 
 func _process(_delta: float) -> void:
@@ -140,6 +237,7 @@ func _process(_delta: float) -> void:
         _commuteLabel.text = "Commute happiness: %.1f / 10" % _traffic.getCommuteHappiness()
     if _city != null:
         _transportDistributionLabel.text = _getTransportDistributionText()
+    _updateHoverTileLabel()
     var shiftNow: bool = Input.is_key_pressed(KEY_SHIFT)
     if shiftNow != _debugShiftHeld:
         _debugShiftHeld = shiftNow
@@ -160,6 +258,13 @@ func _input(event: InputEvent) -> void:
                 if event.pressed and event.shift_pressed:
                     var worldPos: Vector2 = (event.position - _pan) / _zoom
                     _debugger.debugCarsNear(worldPos, _debugRadius)
+                elif event.pressed and _abilityManager != null \
+                        and _abilityManager.selectedAbility != null:
+                    var worldPos: Vector2 = (event.position - _pan) / _zoom
+                    var tile: Vector2i = _city.getTileAtWorldPosition(worldPos)
+                    if _abilityManager.applySelectedAtTile(tile):
+                        _trafficLayer.queue_redraw()
+                    _updateAbilityStatus()
                 elif event.pressed:
                     _dragging = true
                     _dragOrigin = event.position
@@ -206,6 +311,14 @@ func _input(event: InputEvent) -> void:
             KEY_C:
                 _generator.rng.seed = _generator.rng.randi()
                 _generateCongestedCity()
+            _:
+                if _abilityManager != null and _abilityManager.selectAbilityByHotkey(event.keycode):
+                    if _abilityManager.selectedAbility != null \
+                            and not _abilityManager.selectedAbility.requiresTile:
+                        _abilityManager.applySelectedAtTile(City.NoTile)
+                        _abilityManager.selectedAbility = null
+                    _updateAbilityStatus()
+                    _trafficLayer.queue_redraw()
 
 
 func _zoomAt(screenPos: Vector2, factor: float) -> void:

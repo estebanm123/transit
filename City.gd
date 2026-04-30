@@ -15,13 +15,16 @@ const CStreet: Color = Palette.CGrayDeep
 
 const CPark: Color = Palette.CGreen
 const TransportCar: String = "car"
+const TransportBus: String = "bus"
 const TransportBike: String = "bike"
 const TransportWalk: String = "walk"
 const TransportModes: Array[String] = [
 	TransportCar,
+	TransportBus,
 	TransportBike,
 	TransportWalk,
 ]
+const NoTile: Vector2i = Vector2i(-1, -1)
 
 const CRes: Array[Color] = [
 	Palette.CBlueDark,
@@ -45,7 +48,10 @@ const CInd: Array[Color] = [
 class TileCommuteProfile extends RefCounted:
 	var population: int = 0
 	var commuteCostByMode: Dictionary = {}
+	var baseTransportDistribution: Dictionary = {}
 	var transportDistribution: Dictionary = {}
+	var transitSuppression: float = 0.0
+	var currentCarCommuteMinutes: float = 0.0
 
 
 var vertStreetWidths: Array[float] = []
@@ -84,9 +90,35 @@ func getCommuteProfile(col: int, row: int) -> TileCommuteProfile:
 	return commuteProfiles[row][col]
 
 
+func getTileAtWorldPosition(worldPos: Vector2) -> Vector2i:
+	# Randomized block sizes and variable-width streets make arithmetic grid lookup inexact.
+	var col: int = _findBlockAxisIndex(worldPos.x, _colXPositions, _colWidths)
+	var row: int = _findBlockAxisIndex(worldPos.y, _rowYPositions, _rowHeights)
+	if col < 0 or row < 0:
+		return NoTile
+	return Vector2i(col, row)
+
+
+func _findBlockAxisIndex(pos: float, starts: Array[float], sizes: Array[float]) -> int:
+	var lo: int = 0
+	var hi: int = starts.size() - 1
+	while lo <= hi:
+		var mid: int = (lo + hi) / 2
+		var start: float = starts[mid]
+		var end: float = start + sizes[mid]
+		if pos < start:
+			hi = mid - 1
+		elif pos >= end:
+			lo = mid + 1
+		else:
+			return mid
+	return -1
+
+
 func getOverallTransportDistribution() -> Dictionary:
 	var totals: Dictionary = {
 		TransportCar: 0.0,
+		TransportBus: 0.0,
 		TransportBike: 0.0,
 		TransportWalk: 0.0,
 	}

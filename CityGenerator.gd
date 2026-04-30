@@ -345,6 +345,9 @@ func _assignResidentialCommuteProfiles(city: City) -> void:
 			profile.commuteCostByMode = _commuteCostsForTile(col, row, zone, cityCenter)
 			profile.transportDistribution = _initialTransportDistribution(
 					zone, cityWalkShare, cityBikeShare)
+			profile.baseTransportDistribution = profile.transportDistribution.duplicate()
+			profile.currentCarCommuteMinutes = profile.commuteCostByMode.get(
+					City.TransportCar, 0.0)
 			city.commuteProfiles[row][col] = profile
 			city.totalPopulation += profile.population
 
@@ -375,6 +378,7 @@ func _commuteCostsForTile(col: int, row: int, zone: int, cityCenter: Vector2) ->
 			densityMultiplier = 0.8
 	return {
 		City.TransportCar: 8.0 + distanceFromCenter * 0.75 * densityMultiplier,
+		City.TransportBus: 10.0 + distanceFromCenter * 0.95 * densityMultiplier,
 		City.TransportBike: 5.0 + distanceFromCenter * 1.25 * densityMultiplier,
 		City.TransportWalk: 4.0 + distanceFromCenter * 3.0 * densityMultiplier,
 	}
@@ -404,6 +408,7 @@ func _initialTransportDistribution(zone: int, cityWalkShare: float,
 		bikeShare *= scale
 	return {
 		City.TransportCar: 1.0 - walkShare - bikeShare,
+		City.TransportBus: 0.0,
 		City.TransportBike: bikeShare,
 		City.TransportWalk: walkShare,
 	}

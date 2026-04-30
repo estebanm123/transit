@@ -1,0 +1,17 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://51aed46exwtm"
+
+[deps]
+
+files=["res://docs/Abilities.Upfront cost (K$,M$,B$).translation", "res://docs/Abilities.Operating cost (K$,M$,B$).translation", "res://docs/Abilities.Effects (description of gameplay modifier).translation", "res://docs/Abilities.Notes (misc brainstorm section).translation", "res://docs/Abilities.isDefault (is part of default ability pack available).translation"]
+
+source_file="res://docs/Abilities.csv"
+dest_files=["res://docs/Abilities.Upfront cost (K$,M$,B$).translation", "res://docs/Abilities.Operating cost (K$,M$,B$).translation", "res://docs/Abilities.Effects (description of gameplay modifier).translation", "res://docs/Abilities.Notes (misc brainstorm section).translation", "res://docs/Abilities.isDefault (is part of default ability pack available).translation"]
+
+[params]
+
+compress=true
+delimiter=0

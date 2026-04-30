@@ -1,0 +1,17 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://m4j1weehsos3"
+
+[deps]
+
+files=["res://docs/Events.Duration.translation", "res://docs/Events.Effects.translation", "res://docs/Events.Response options.translation", "res://docs/Events.Can generate.translation", "res://docs/Events.Notes.translation"]
+
+source_file="res://docs/Events.csv"
+dest_files=["res://docs/Events.Duration.translation", "res://docs/Events.Effects.translation", "res://docs/Events.Response options.translation", "res://docs/Events.Can generate.translation", "res://docs/Events.Notes.translation"]
+
+[params]
+
+compress=true
+delimiter=0

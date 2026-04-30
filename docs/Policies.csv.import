@@ -1,0 +1,17 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://bmlq4fomx538g"
+
+[deps]
+
+files=["res://docs/Policies.Effects.translation", "res://docs/Policies.Synergies.translation", "res://docs/Policies.Risks.translation", "res://docs/Policies.Acquisition notes.translation", "res://docs/Policies.Notes.translation"]
+
+source_file="res://docs/Policies.csv"
+dest_files=["res://docs/Policies.Effects.translation", "res://docs/Policies.Synergies.translation", "res://docs/Policies.Risks.translation", "res://docs/Policies.Acquisition notes.translation", "res://docs/Policies.Notes.translation"]
+
+[params]
+
+compress=true
+delimiter=0

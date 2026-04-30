@@ -5,6 +5,12 @@ const CarSpeedMin: float = 4.25
 const CarSpeedMax: float = 9.35
 const CarLength: float = 2.8
 const CarWidth: float = 1.8
+const LowDensityCommuteCars: int = 1
+const MediumDensityCommuteCars: int = 3
+const HighDensityCommuteCars: int = 6
+const CommuteSpawnInterval: float = 2.0
+const CommuteStageOutbound: int = 0
+const CommuteStageReturningHome: int = 1
 
 const CarColors: Array[Color] = [
     Palette.CGrayLight,
@@ -71,6 +77,10 @@ class Car extends RefCounted:
     var follower = null
     var goalTile: Vector2i = Vector2i.ZERO
     var goalIntersection: Vector2i = Vector2i.ZERO
+    var homeTile: Vector2i = City.NoTile
+    var commuteDestinationTile: Vector2i = City.NoTile
+    var commuteStage: int = CommuteStageOutbound
+    var commuteElapsedSeconds: float = 0.0
     var goalHops: int = 0
     var historyBuf: Array = [
         Vector4i(), Vector4i(), Vector4i(), Vector4i(),
@@ -91,6 +101,7 @@ var _tilesByZone: Dictionary = {}
 var _time: float = 0.0
 var _lastDelta: float = 1.0 / 60.0
 var _city: City
+var _transitSystem: TransitSystem
 
 var _vertStreetX: PackedFloat32Array
 var _horzStreetY: PackedFloat32Array
@@ -102,18 +113,26 @@ var _goalZones: Array[int] = []
 var _averageCommuteSeconds: float = 0.0
 var _commuteSampleTimer: float = 0.0
 var _commuteSampleCursor: int = 0
+var _commuteSpawnTimer: float = 0.0
+var _residentialHomeTiles: Array[Vector2i] = []
+var _desiredCarsByHome: Dictionary = {}
+var _activeCarsByHome: Dictionary = {}
+var _carsToRemove: Array[Car] = []
 
 
-func init(city: City, startCongested: bool = false) -> void:
+func init(city: City, transitSystem: TransitSystem = null, startCongested: bool = false) -> void:
     _city = city
+    _transitSystem = transitSystem
     _rng.seed = 99991
     _time = 0.0
     _lastDelta = 1.0 / 60.0
     _averageCommuteSeconds = 0.0
     _commuteSampleTimer = 0.0
     _commuteSampleCursor = 0
+    _commuteSpawnTimer = 0.0
     _trafficLights.clear()
     _intersectionLocks.clear()
+    _carsToRemove.clear()
     for v in range(City.Cols + 1):
         for h in range(City.Rows + 1):
             if city.vertStreetWidths[v] >= City.WCollector \
@@ -135,10 +154,9 @@ func init(city: City, startCongested: bool = false) -> void:
     _buildTilesByZone(city)
     _buildPositionCache(city)
     _buildUsabilityCache(city)
-    if startCongested:
-        _spawnCongestedCars(city)
-    else:
-        _spawnRandomCars(city)
+    _buildResidentialCommuteHomes(city)
+    refreshTransitImpacts()
+    _spawnHomeBasedCars(city, startCongested)
     _cars.sort_custom(func(a: Car, b: Car) -> bool: return a.colorIndex < b.colorIndex)
     _buildSegmentMap()
 
@@ -147,7 +165,10 @@ func tick(city: City, delta: float) -> void:
     _time += delta
     _lastDelta = delta
     for car in _cars:
+        car.commuteElapsedSeconds += delta
         _advanceCar(city, car, delta)
+    _removeQueuedCars()
+    _updateMissingCommuteCars(city, delta)
     _updateCommuteEstimate(delta)
 
 
@@ -159,6 +180,18 @@ func getCommuteHappiness() -> float:
     var commuteMinutes: float = getAverageCommuteMinutes()
     var t: float = inverse_lerp(HappyCommuteMinutes, MiserableCommuteMinutes, commuteMinutes)
     return (1.0 - clampf(t, 0.0, 1.0)) * 10.0
+
+
+func refreshTransitImpacts() -> void:
+    for homeTile: Vector2i in _residentialHomeTiles:
+        var profile: City.TileCommuteProfile = _city.getCommuteProfile(homeTile.x, homeTile.y)
+        if profile == null:
+            continue
+        var suppression: float = 0.0
+        if _transitSystem != null:
+            suppression = _transitSystem.getSuppressionForTile(_city, homeTile)
+        _applyTransitSuppression(profile, suppression)
+        _desiredCarsByHome[homeTile] = _getDesiredCarCountForHome(homeTile)
 
 
 func _updateCommuteEstimate(delta: float) -> void:
@@ -421,6 +454,160 @@ func _getIntersectionBoxProgress(segLength: float) -> float:
 
 func _getReservationReleaseProgress(segLength: float) -> float:
     return minf(_getIntersectionBoxProgress(segLength), _getStopLineProgress(segLength))
+
+
+func _buildResidentialCommuteHomes(city: City) -> void:
+    _residentialHomeTiles.clear()
+    _desiredCarsByHome.clear()
+    _activeCarsByHome.clear()
+    for row in City.Rows:
+        for col in City.Cols:
+            if city.parcelOwner[row][col] != Vector2i(col, row):
+                continue
+            if not _isResidentialZone(city.zones[row][col]):
+                continue
+            var homeTile := Vector2i(col, row)
+            _residentialHomeTiles.append(homeTile)
+            _activeCarsByHome[homeTile] = 0
+
+
+func _spawnHomeBasedCars(city: City, spreadAcrossSegments: bool) -> void:
+    var occupiedProgressBySegment: Dictionary = {}
+    for homeTile: Vector2i in _residentialHomeTiles:
+        var desiredCount: int = _desiredCarsByHome.get(homeTile, 0)
+        for _carIndex in desiredCount:
+            var car: Car = _spawnCarFromHome(city, homeTile, spreadAcrossSegments,
+                    occupiedProgressBySegment)
+            if car == null:
+                continue
+            _cars.append(car)
+            _activeCarsByHome[homeTile] = _activeCarsByHome.get(homeTile, 0) + 1
+
+
+func _updateMissingCommuteCars(city: City, delta: float) -> void:
+    _commuteSpawnTimer += delta
+    if _commuteSpawnTimer < CommuteSpawnInterval:
+        return
+    _commuteSpawnTimer = fmod(_commuteSpawnTimer, CommuteSpawnInterval)
+    for homeTile: Vector2i in _residentialHomeTiles:
+        var desiredCount: int = _desiredCarsByHome.get(homeTile, 0)
+        var activeCount: int = _activeCarsByHome.get(homeTile, 0)
+        while activeCount < desiredCount:
+            var car: Car = _spawnCarFromHome(city, homeTile, false, {})
+            if car == null:
+                break
+            _cars.append(car)
+            _activeCarsByHome[homeTile] = activeCount + 1
+            activeCount += 1
+            _insertIntoSegment(car)
+
+
+func _spawnCarFromHome(city: City, homeTile: Vector2i, spreadAcrossSegments: bool,
+        occupiedProgressBySegment: Dictionary) -> Car:
+    var homeIntersection: Vector2i = _getClosestTileIntersection(city, homeTile)
+    var exits: Array = _getExitSegments(homeIntersection.x, homeIntersection.y, -999, -999)
+    if exits.is_empty():
+        return null
+    var scatterOnSegment: bool = spreadAcrossSegments or _segmentMap.is_empty()
+    for _attempt in range(12):
+        var exit: Array = exits[_rng.randi() % exits.size()]
+        var toVertStreet: int = exit[0]
+        var toHorzStreet: int = exit[1]
+        var segLength: float = _getSegmentLength(
+                homeIntersection.x, homeIntersection.y, toVertStreet, toHorzStreet)
+        if segLength < 0.5:
+            continue
+        var progress: float = SpawnClearance / segLength
+        if scatterOnSegment:
+            var minProgress: float = _getIntersectionBoxProgress(segLength) \
+                    + SpawnClearance / segLength
+            var maxProgress: float = _getStopLineProgress(segLength) - SpawnClearance / segLength
+            if minProgress >= maxProgress:
+                continue
+            progress = _rng.randf_range(minProgress, maxProgress)
+        var segment := Vector4i(
+                homeIntersection.x, homeIntersection.y, toVertStreet, toHorzStreet)
+        if scatterOnSegment:
+            if not _reserveSpawnProgress(segment, progress, segLength, occupiedProgressBySegment):
+                continue
+        elif not _segmentHasSpawnClearance(segment, progress, segLength):
+            continue
+        var car: Car = _createCarOnSegment(city, homeIntersection.x, homeIntersection.y,
+                toVertStreet, toHorzStreet, progress, false)
+        if car == null:
+            continue
+        car.homeTile = homeTile
+        _assignWeightedCommuteDestination(city, car)
+        return car
+    return null
+
+
+func _segmentHasSpawnClearance(segment: Vector4i, progress: float, segLength: float) -> bool:
+    var tail: Car = _segmentMap.get(segment, null)
+    if tail == null:
+        return true
+    return absf(tail.progress - progress) * segLength >= SpawnClearance
+
+
+func _removeQueuedCars() -> void:
+    if _carsToRemove.is_empty():
+        return
+    for car: Car in _carsToRemove:
+        _cars.erase(car)
+    _carsToRemove.clear()
+
+
+func _queueRetireCar(car: Car) -> void:
+    if _carsToRemove.has(car):
+        return
+    _releaseIntersection(car)
+    _removeFromSegment(car)
+    var activeCount: int = _activeCarsByHome.get(car.homeTile, 0)
+    _activeCarsByHome[car.homeTile] = maxi(0, activeCount - 1)
+    _carsToRemove.append(car)
+
+
+func _applyTransitSuppression(profile: City.TileCommuteProfile, suppression: float) -> void:
+    profile.transitSuppression = clampf(suppression, 0.0, 1.0)
+    var baseDistribution: Dictionary = profile.baseTransportDistribution
+    var baseCarShare: float = baseDistribution.get(City.TransportCar, 0.0)
+    var busShare: float = baseCarShare * profile.transitSuppression
+    profile.transportDistribution = {
+        City.TransportCar: baseCarShare - busShare,
+        City.TransportBus: busShare,
+        City.TransportBike: baseDistribution.get(City.TransportBike, 0.0),
+        City.TransportWalk: baseDistribution.get(City.TransportWalk, 0.0),
+    }
+    var carMinutes: float = maxf(profile.currentCarCommuteMinutes, 1.0)
+    profile.commuteCostByMode[City.TransportBus] = carMinutes \
+            * lerpf(1.10, 0.80, profile.transitSuppression)
+
+
+func _getDesiredCarCountForHome(homeTile: Vector2i) -> int:
+    var profile: City.TileCommuteProfile = _city.getCommuteProfile(homeTile.x, homeTile.y)
+    if profile == null:
+        return 0
+    var baseCarShare: float = maxf(
+            profile.baseTransportDistribution.get(City.TransportCar, 0.0), 0.001)
+    var currentCarShare: float = profile.transportDistribution.get(City.TransportCar, 0.0)
+    var zone: int = _city.zones[homeTile.y][homeTile.x]
+    return int(round(float(_getBaseCarCountForZone(zone)) * currentCarShare / baseCarShare))
+
+
+func _getBaseCarCountForZone(zone: int) -> int:
+    match zone:
+        Zone.HighDensityResidential:
+            return HighDensityCommuteCars
+        Zone.MediumDensityResidential:
+            return MediumDensityCommuteCars
+        _:
+            return LowDensityCommuteCars
+
+
+func _isResidentialZone(zone: int) -> bool:
+    return zone == Zone.Residential \
+            or zone == Zone.MediumDensityResidential \
+            or zone == Zone.HighDensityResidential
 
 
 func _spawnRandomCars(city: City) -> void:
@@ -861,14 +1048,15 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
     var arrivedVertStreet: int = car.toVertStreet
     var arrivedHorzStreet: int = car.toHorzStreet
 
-    var neighbors: Array = _getExitSegments(
-            arrivedVertStreet, arrivedHorzStreet,
-            car.fromVertStreet, car.fromHorzStreet)
     car.goalHops += 1
     if (arrivedVertStreet == car.goalIntersection.x \
             and arrivedHorzStreet == car.goalIntersection.y) \
             or car.goalHops > GoalHopsMax:
-        _assignGoal(city, car)
+        if _handleCommuteGoalReached(city, car):
+            return
+    var neighbors: Array = _getExitSegments(
+            arrivedVertStreet, arrivedHorzStreet,
+            car.fromVertStreet, car.fromHorzStreet)
     var nextToVertStreet: int
     var nextToHorzStreet: int
     if neighbors.is_empty():
@@ -944,7 +1132,43 @@ func _advanceCar(city: City, car: Car, delta: float) -> void:
                 looping = false
                 break
         if looping:
-            _assignGoal(city, car)
+            _resetCurrentCommuteGoal(city, car)
+
+
+func _handleCommuteGoalReached(city: City, car: Car) -> bool:
+    if car.commuteStage == CommuteStageOutbound:
+        _recordCompletedOutboundCommute(car)
+        car.commuteStage = CommuteStageReturningHome
+        car.commuteElapsedSeconds = 0.0
+        _assignHomeGoal(city, car)
+        return false
+    var desiredCount: int = _desiredCarsByHome.get(car.homeTile, 0)
+    var activeCount: int = _activeCarsByHome.get(car.homeTile, 0)
+    if activeCount > desiredCount:
+        _queueRetireCar(car)
+        return true
+    car.commuteStage = CommuteStageOutbound
+    car.commuteElapsedSeconds = 0.0
+    _assignWeightedCommuteDestination(city, car)
+    return false
+
+
+func _recordCompletedOutboundCommute(car: Car) -> void:
+    var profile: City.TileCommuteProfile = _city.getCommuteProfile(car.homeTile.x, car.homeTile.y)
+    if profile == null:
+        return
+    var commuteMinutes: float = maxf(car.commuteElapsedSeconds / 60.0, 0.1)
+    profile.currentCarCommuteMinutes = lerpf(
+            profile.currentCarCommuteMinutes, commuteMinutes, CommuteSmoothing)
+    profile.commuteCostByMode[City.TransportCar] = profile.currentCarCommuteMinutes
+    _applyTransitSuppression(profile, profile.transitSuppression)
+
+
+func _resetCurrentCommuteGoal(city: City, car: Car) -> void:
+    if car.commuteStage == CommuteStageReturningHome:
+        _assignHomeGoal(city, car)
+    else:
+        _assignWeightedCommuteDestination(city, car)
 
 
 func _buildTilesByZone(city: City) -> void:
@@ -984,10 +1208,32 @@ func _pickGoalTile() -> Vector2i:
     return tiles[_rng.randi() % tiles.size()]
 
 
-func _assignGoal(city: City, car: Car) -> void:
+func _assignWeightedCommuteDestination(city: City, car: Car) -> void:
     car.historyHead = 0
     car.historyCount = 0
     var tile: Vector2i = _pickGoalTile()
+    for _attempt in range(8):
+        if tile != car.homeTile:
+            break
+        tile = _pickGoalTile()
+    car.commuteDestinationTile = tile
+    car.commuteStage = CommuteStageOutbound
+    _assignGoalToTile(city, car, tile)
+
+
+func _assignHomeGoal(city: City, car: Car) -> void:
+    car.historyHead = 0
+    car.historyCount = 0
+    _assignGoalToTile(city, car, car.homeTile)
+
+
+func _assignGoal(city: City, car: Car) -> void:
+    _assignWeightedCommuteDestination(city, car)
+
+
+func _assignGoalToTile(_city: City, car: Car, tile: Vector2i) -> void:
+    car.historyHead = 0
+    car.historyCount = 0
     car.goalTile = tile
     var corners: Array[Vector2i] = [
         Vector2i(tile.x, tile.y),
@@ -1008,6 +1254,29 @@ func _assignGoal(city: City, car: Car) -> void:
             bestCorner = corner
     car.goalIntersection = bestCorner
     car.goalHops = 0
+
+
+func _getClosestTileIntersection(city: City, tile: Vector2i) -> Vector2i:
+    if _transitSystem != null:
+        return _transitSystem.getClosestTileIntersection(city, tile)
+    var rect: Rect2 = city.blockRect(tile.x, tile.y)
+    var center: Vector2 = rect.position + rect.size * 0.5
+    var corners: Array[Vector2i] = [
+        Vector2i(tile.x, tile.y),
+        Vector2i(tile.x + 1, tile.y),
+        Vector2i(tile.x, tile.y + 1),
+        Vector2i(tile.x + 1, tile.y + 1),
+    ]
+    var bestCorner: Vector2i = corners[0]
+    var bestDistance: float = INF
+    for corner: Vector2i in corners:
+        var cx: float = _vertStreetX[corner.x]
+        var cy: float = _horzStreetY[corner.y]
+        var distance: float = center.distance_squared_to(Vector2(cx, cy))
+        if distance < bestDistance:
+            bestDistance = distance
+            bestCorner = corner
+    return bestCorner
 
 
 func _greedyExit(candidates: Array, goalIntersection: Vector2i) -> Array:
