@@ -2,6 +2,8 @@ class_name Main extends Node2D
 
 const ZoomMin: float = 0.15
 const ZoomMax: float = 5.0
+const ZoomStepFactor: float = 1.15
+const TrackpadScrollPixelsPerStep: float = 20.0
 const SimulationRateNormal: int = 1
 const SimulationRateMax: int = 8
 const TileHappyCommuteMinutes: float = 10.0
@@ -378,16 +380,14 @@ func _input(event: InputEvent) -> void:
                     _dragging = false
             MOUSE_BUTTON_WHEEL_UP:
                 if event.shift_pressed:
-                    _debugRadius = maxf(5.0, _debugRadius * (1.0 / 1.15))
-                    _hudNode.queue_redraw()
+                    _adjustDebugRadius(-1.0)
                 else:
-                    _zoomAt(event.position, 1.15)
+                    _zoomBySteps(event.position, 1.0)
             MOUSE_BUTTON_WHEEL_DOWN:
                 if event.shift_pressed:
-                    _debugRadius = minf(500.0, _debugRadius * 1.15)
-                    _hudNode.queue_redraw()
+                    _adjustDebugRadius(1.0)
                 else:
-                    _zoomAt(event.position, 1.0 / 1.15)
+                    _zoomBySteps(event.position, -1.0)
     elif event is InputEventMouseMotion:
         _debugMouseScreenPos = event.position
         if _debugShiftHeld:
@@ -398,6 +398,17 @@ func _input(event: InputEvent) -> void:
         elif _dragging:
             _pan = _panOrigin + (event.position - _dragOrigin)
             _updateLayerTransforms()
+    elif event is InputEventPanGesture:
+        var mouseScreenPos: Vector2 = get_viewport().get_mouse_position()
+        if _controlsContainer.get_global_rect().has_point(mouseScreenPos):
+            return
+        if absf(event.delta.y) <= absf(event.delta.x):
+            return
+        var scrollSteps: float = -event.delta.y / TrackpadScrollPixelsPerStep
+        if event.shift_pressed:
+            _adjustDebugRadius(scrollSteps)
+        else:
+            _zoomBySteps(mouseScreenPos, scrollSteps)
     elif event is InputEventKey and event.pressed and not event.echo:
         match event.keycode:
             KEY_SPACE:
@@ -420,6 +431,19 @@ func _input(event: InputEvent) -> void:
                         _abilityManager.selectedAbility = null
                     _updateAbilityStatus()
                     _trafficLayer.queue_redraw()
+
+
+func _zoomBySteps(screenPos: Vector2, zoomSteps: float) -> void:
+    if is_zero_approx(zoomSteps):
+        return
+    _zoomAt(screenPos, pow(ZoomStepFactor, zoomSteps))
+
+
+func _adjustDebugRadius(radiusSteps: float) -> void:
+    if is_zero_approx(radiusSteps):
+        return
+    _debugRadius = clamp(_debugRadius * pow(ZoomStepFactor, radiusSteps), 5.0, 500.0)
+    _hudNode.queue_redraw()
 
 
 func _zoomAt(screenPos: Vector2, factor: float) -> void:
