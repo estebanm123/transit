@@ -10,7 +10,7 @@ const TileMiserableCommuteMinutes: float = 45.0
 var _generator: CityGenerator
 var _city: City
 var _traffic: Traffic
-var _transitSystem: TransitSystem
+var _subwaySystem: SubwaySystem
 var _abilityManager: AbilityManager
 var _zoom: float = 1.0
 var _pan: Vector2 = Vector2.ZERO
@@ -36,6 +36,8 @@ var _debugMouseScreenPos: Vector2 = Vector2.ZERO
 var _debugRadius: float = 16.7
 var _paused: bool = false
 var _simulationRate: int = SimulationRateNormal
+var _subwayConnectionDragActive: bool = false
+var _subwayConnectionDragSourceIndex: int = -1
 
 
 func _ready() -> void:
@@ -91,9 +93,8 @@ func _ready() -> void:
     _congestedButton.pressed.connect(_generateCongestedCity)
     _controlsContainer.add_child(_congestedButton)
 
-    _addAbilityButton("Bus Station (B)", "Bus Station")
-    _addAbilityButton("New Bus Line (N)", "New Bus Line")
-    _addAbilityButton("Add Bus (V)", "Add Bus")
+    _addAbilityButton("Subway Station (S)", "Subway Station")
+    _addAbilityButton("Add Subway (V)", "Add Subway")
 
     get_viewport().size_changed.connect(queue_redraw)
     get_viewport().size_changed.connect(_hudNode.queue_redraw)
@@ -107,16 +108,18 @@ func _ready() -> void:
 func _generateCity(startCongested: bool = false) -> void:
     _city = _generator.generate()
     _traffic = Traffic.new()
-    _transitSystem = TransitSystem.new()
-    _transitSystem.init(_city)
-    _traffic.init(_city, _transitSystem, startCongested)
+    _subwaySystem = SubwaySystem.new()
+    _subwaySystem.init(_city)
+    _traffic.init(_city, _subwaySystem, startCongested)
     _cityLayer.setup(_city)
-    _trafficLayer.setup(_traffic, _city, _transitSystem)
+    _trafficLayer.setup(_traffic, _city, _subwaySystem)
     _trafficLayer.simulationRate = _simulationRate
     _debugger = TrafficDebugger.new()
     _debugger.init(_traffic)
     _abilityManager = AbilityManager.new()
-    _abilityManager.init(_city, _transitSystem, _traffic)
+    _abilityManager.init(_city, _subwaySystem, _traffic)
+    _subwayConnectionDragActive = false
+    _subwayConnectionDragSourceIndex = -1
     _updateAbilityStatus()
     _updateLayerTransforms()
 
@@ -154,7 +157,7 @@ func _activateAbilityByName(abilityName: String) -> void:
         return
     _abilityManager.selectAbilityByName(abilityName)
     if _abilityManager.selectedAbility != null \
-            and not _abilityManager.selectedAbility.requiresTile:
+            and _abilityManager.selectedAbility.appliesImmediately:
         _abilityManager.applySelectedAtTile(City.NoTile)
         _abilityManager.selectedAbility = null
     _updateAbilityStatus()
@@ -164,8 +167,101 @@ func _activateAbilityByName(abilityName: String) -> void:
 func _updateAbilityStatus() -> void:
     if _abilityManager == null or _abilityManager.selectedAbility == null:
         _abilityStatusLabel.text = ""
+        if _trafficLayer != null:
+            _trafficLayer.clearSubwayStationPreview()
+            _trafficLayer.clearSubwayConnectionPreview()
         return
     _abilityStatusLabel.text = "Placing: %s" % _abilityManager.selectedAbility.displayName
+    _updatePlacementPreview()
+
+
+func _getMouseWorldPosition() -> Vector2:
+    return (get_viewport().get_mouse_position() - _pan) / _zoom
+
+
+func _updatePlacementPreview() -> void:
+    if _abilityManager == null or _trafficLayer == null:
+        return
+    if _abilityManager.selectedAbility == null:
+        _trafficLayer.clearSubwayStationPreview()
+        return
+    if _subwayConnectionDragActive:
+        _trafficLayer.clearSubwayStationPreview()
+        return
+    var preview: SubwaySystem.SubwayStationPlacement = (
+            _abilityManager.getSubwayStationPlacementPreview(_getMouseWorldPosition()))
+    if preview == null:
+        _trafficLayer.clearSubwayStationPreview()
+        return
+    _trafficLayer.setSubwayStationPreview(preview.worldPosition, preview.isValid)
+
+
+func _handleSubwayStationPressed(worldPosition: Vector2) -> void:
+    var sourceStationIndex: int = _subwaySystem.getSubwayStationIndexAtWorldPosition(worldPosition)
+    if sourceStationIndex >= 0:
+        if _subwaySystem.canConnectFromStation(sourceStationIndex):
+            _startSubwayConnectionDrag(sourceStationIndex, worldPosition)
+        return
+    if _abilityManager.applySelectedAtWorldPosition(worldPosition):
+        _trafficLayer.queue_redraw()
+    _updateAbilityStatus()
+
+
+func _tryStartSubwayConnectionDrag(worldPosition: Vector2) -> bool:
+    var sourceStationIndex: int = _subwaySystem.getSubwayStationIndexAtWorldPosition(worldPosition)
+    if sourceStationIndex < 0:
+        return false
+    if not _subwaySystem.canConnectFromStation(sourceStationIndex):
+        return false
+    _startSubwayConnectionDrag(sourceStationIndex, worldPosition)
+    return true
+
+
+func _startSubwayConnectionDrag(sourceStationIndex: int, worldPosition: Vector2) -> void:
+    _subwayConnectionDragActive = true
+    _subwayConnectionDragSourceIndex = sourceStationIndex
+    _trafficLayer.clearSubwayStationPreview()
+    _updateSubwayConnectionPreview(worldPosition)
+
+
+func _updateSubwayConnectionPreview(worldPosition: Vector2) -> void:
+    if not _subwayConnectionDragActive:
+        return
+    var placement: SubwaySystem.SubwayStationPlacement = _subwaySystem.getSubwayStationPlacement(
+            _city, worldPosition)
+    var isValid: bool = _canFinishSubwayConnection(worldPosition, placement)
+    _trafficLayer.setSubwayConnectionPreview(
+            _subwayConnectionDragSourceIndex, placement.worldPosition, isValid)
+
+
+func _finishSubwayConnectionDrag(worldPosition: Vector2) -> void:
+    var placement: SubwaySystem.SubwayStationPlacement = _subwaySystem.getSubwayStationPlacement(
+            _city, worldPosition)
+    if _canFinishSubwayConnection(worldPosition, placement):
+        var station: RefCounted = _subwaySystem.addConnectedSubwayStation(
+                _city, _subwayConnectionDragSourceIndex, placement.worldPosition)
+        if station != null:
+            _traffic.refreshTransitImpacts()
+    _subwayConnectionDragActive = false
+    _subwayConnectionDragSourceIndex = -1
+    _trafficLayer.clearSubwayConnectionPreview()
+    _trafficLayer.queue_redraw()
+    _updateAbilityStatus()
+
+
+func _canFinishSubwayConnection(worldPosition: Vector2,
+        placement: SubwaySystem.SubwayStationPlacement) -> bool:
+    if not placement.isValid:
+        return false
+    if not _subwaySystem.canConnectFromStation(_subwayConnectionDragSourceIndex):
+        return false
+    if _subwaySystem.getSubwayStationIndexAtWorldPosition(worldPosition) >= 0:
+        return false
+    var sourceStation: SubwaySystem.SubwayStation = (
+            _subwaySystem.subwayStations[_subwayConnectionDragSourceIndex])
+    var minimumDistanceSquared: float = SubwaySystem.StationHitRadius \
+            * SubwaySystem.StationHitRadius
+    return sourceStation.worldPosition.distance_squared_to(worldPosition) > minimumDistanceSquared
 
 
 func _updateLayerTransforms() -> void:
@@ -177,9 +273,9 @@ func _updateLayerTransforms() -> void:
 
 func _getTransportDistributionText() -> String:
     var distribution: Dictionary = _city.getOverallTransportDistribution()
-    return "Transport modes: Cars %.0f%%  Bus %.0f%%  Bikes %.0f%%  Walking %.0f%%" % [
+    return "Transport modes: Cars %.0f%%  Subway %.0f%%  Bikes %.0f%%  Walking %.0f%%" % [
         distribution.get(City.TransportCar, 0.0) * 100.0,
-        distribution.get(City.TransportBus, 0.0) * 100.0,
+        distribution.get(City.TransportSubway, 0.0) * 100.0,
         distribution.get(City.TransportBike, 0.0) * 100.0,
         distribution.get(City.TransportWalk, 0.0) * 100.0,
     ]
@@ -191,8 +287,7 @@ func _updateHoverTileLabel() -> void:
     if _city == null:
         _hoverTileLabel.text = ""
         return
-    var mouseScreenPos: Vector2 = get_viewport().get_mouse_position()
-    var worldPos: Vector2 = (mouseScreenPos - _pan) / _zoom
+    var worldPos: Vector2 = _getMouseWorldPosition()
     var tile: Vector2i = _city.getTileAtWorldPosition(worldPos)
     if tile == City.NoTile:
         _hoverTileLabel.text = ""
@@ -203,12 +298,12 @@ func _updateHoverTileLabel() -> void:
         return
     var distribution: Dictionary = profile.transportDistribution
     _hoverTileLabel.text = (
-        "Tile commute: %.1f / 10  Cars %.0f%%  Bus %.0f%%  Bikes %.0f%%  Walking %.0f%%\n"
+        "Tile commute: %.1f / 10  Cars %.0f%%  Subway %.0f%%  Bikes %.0f%%  Walking %.0f%%\n"
         + "Population: %d  Avg commute: %.1f min"
     ) % [
         _getTileCommuteHappiness(profile),
         distribution.get(City.TransportCar, 0.0) * 100.0,
-        distribution.get(City.TransportBus, 0.0) * 100.0,
+        distribution.get(City.TransportSubway, 0.0) * 100.0,
         distribution.get(City.TransportBike, 0.0) * 100.0,
         distribution.get(City.TransportWalk, 0.0) * 100.0,
         profile.population,
@@ -238,6 +333,7 @@ func _process(_delta: float) -> void:
     if _city != null:
         _transportDistributionLabel.text = _getTransportDistributionText()
     _updateHoverTileLabel()
+    _updatePlacementPreview()
     var shiftNow: bool = Input.is_key_pressed(KEY_SHIFT)
     if shiftNow != _debugShiftHeld:
         _debugShiftHeld = shiftNow
@@ -261,14 +357,16 @@ func _input(event: InputEvent) -> void:
                 elif event.pressed and _abilityManager != null \
                         and _abilityManager.selectedAbility != null:
                     var worldPos: Vector2 = (event.position - _pan) / _zoom
-                    var tile: Vector2i = _city.getTileAtWorldPosition(worldPos)
-                    if _abilityManager.applySelectedAtTile(tile):
-                        _trafficLayer.queue_redraw()
-                    _updateAbilityStatus()
+                    _handleSubwayStationPressed(worldPos)
+                elif not event.pressed and _subwayConnectionDragActive:
+                    var worldPos: Vector2 = (event.position - _pan) / _zoom
+                    _finishSubwayConnectionDrag(worldPos)
                 elif event.pressed:
-                    _dragging = true
-                    _dragOrigin = event.position
-                    _panOrigin = _pan
+                    var worldPos: Vector2 = (event.position - _pan) / _zoom
+                    if not _tryStartSubwayConnectionDrag(worldPos):
+                        _dragging = true
+                        _dragOrigin = event.position
+                        _panOrigin = _pan
                 else:
                     _dragging = false
             MOUSE_BUTTON_MIDDLE:
@@ -294,7 +392,10 @@ func _input(event: InputEvent) -> void:
         _debugMouseScreenPos = event.position
         if _debugShiftHeld:
             _hudNode.queue_redraw()
-        if _dragging:
+        if _subwayConnectionDragActive:
+            var worldPos: Vector2 = (event.position - _pan) / _zoom
+            _updateSubwayConnectionPreview(worldPos)
+        elif _dragging:
             _pan = _panOrigin + (event.position - _dragOrigin)
             _updateLayerTransforms()
     elif event is InputEventKey and event.pressed and not event.echo:
@@ -314,7 +415,7 @@ func _input(event: InputEvent) -> void:
             _:
                 if _abilityManager != null and _abilityManager.selectAbilityByHotkey(event.keycode):
                     if _abilityManager.selectedAbility != null \
-                            and not _abilityManager.selectedAbility.requiresTile:
+                            and _abilityManager.selectedAbility.appliesImmediately:
                         _abilityManager.applySelectedAtTile(City.NoTile)
                         _abilityManager.selectedAbility = null
                     _updateAbilityStatus()

@@ -1,13 +1,13 @@
 class_name Traffic extends RefCounted
 
-const CarCount: int = 1000
+const CarCount: int = 250
 const CarSpeedMin: float = 4.25
 const CarSpeedMax: float = 9.35
 const CarLength: float = 2.8
 const CarWidth: float = 1.8
 const LowDensityCommuteCars: int = 1
-const MediumDensityCommuteCars: int = 3
-const HighDensityCommuteCars: int = 6
+const MediumDensityCommuteCars: int = 1
+const HighDensityCommuteCars: int = 2
 const CommuteSpawnInterval: float = 2.0
 const CommuteStageOutbound: int = 0
 const CommuteStageReturningHome: int = 1
@@ -101,7 +101,7 @@ var _tilesByZone: Dictionary = {}
 var _time: float = 0.0
 var _lastDelta: float = 1.0 / 60.0
 var _city: City
-var _transitSystem: TransitSystem
+var _subwaySystem: SubwaySystem
 
 var _vertStreetX: PackedFloat32Array
 var _horzStreetY: PackedFloat32Array
@@ -120,9 +120,9 @@ var _activeCarsByHome: Dictionary = {}
 var _carsToRemove: Array[Car] = []
 
 
-func init(city: City, transitSystem: TransitSystem = null, startCongested: bool = false) -> void:
+func init(city: City, subwaySystem: SubwaySystem = null, startCongested: bool = false) -> void:
     _city = city
-    _transitSystem = transitSystem
+    _subwaySystem = subwaySystem
     _rng.seed = 99991
     _time = 0.0
     _lastDelta = 1.0 / 60.0
@@ -188,8 +188,8 @@ func refreshTransitImpacts() -> void:
         if profile == null:
             continue
         var suppression: float = 0.0
-        if _transitSystem != null:
-            suppression = _transitSystem.getSuppressionForTile(_city, homeTile)
+        if _subwaySystem != null:
+            suppression = _subwaySystem.getSuppressionForTile(_city, homeTile)
         _applyTransitSuppression(profile, suppression)
         _desiredCarsByHome[homeTile] = _getDesiredCarCountForHome(homeTile)
 
@@ -571,15 +571,15 @@ func _applyTransitSuppression(profile: City.TileCommuteProfile, suppression: flo
     profile.transitSuppression = clampf(suppression, 0.0, 1.0)
     var baseDistribution: Dictionary = profile.baseTransportDistribution
     var baseCarShare: float = baseDistribution.get(City.TransportCar, 0.0)
-    var busShare: float = baseCarShare * profile.transitSuppression
+    var subwayShare: float = baseCarShare * profile.transitSuppression
     profile.transportDistribution = {
-        City.TransportCar: baseCarShare - busShare,
-        City.TransportBus: busShare,
+        City.TransportCar: baseCarShare - subwayShare,
+        City.TransportSubway: subwayShare,
         City.TransportBike: baseDistribution.get(City.TransportBike, 0.0),
         City.TransportWalk: baseDistribution.get(City.TransportWalk, 0.0),
     }
     var carMinutes: float = maxf(profile.currentCarCommuteMinutes, 1.0)
-    profile.commuteCostByMode[City.TransportBus] = carMinutes \
+    profile.commuteCostByMode[City.TransportSubway] = carMinutes \
             * lerpf(1.10, 0.80, profile.transitSuppression)
 
 
@@ -1257,8 +1257,8 @@ func _assignGoalToTile(_city: City, car: Car, tile: Vector2i) -> void:
 
 
 func _getClosestTileIntersection(city: City, tile: Vector2i) -> Vector2i:
-    if _transitSystem != null:
-        return _transitSystem.getClosestTileIntersection(city, tile)
+    if _subwaySystem != null:
+        return _subwaySystem.getClosestTileIntersection(city, tile)
     var rect: Rect2 = city.blockRect(tile.x, tile.y)
     var center: Vector2 = rect.position + rect.size * 0.5
     var corners: Array[Vector2i] = [

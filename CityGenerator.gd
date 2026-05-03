@@ -26,7 +26,7 @@ func generate() -> City:
 
 
 func _computeLayout(city: City) -> void:
-	_numArms = rng.randi_range(4, 6)
+	_numArms = rng.randi_range(2, 3)
 	_armAngles.clear()
 	var baseAngle: float = rng.randf() * TAU
 	for i in _numArms:
@@ -378,7 +378,7 @@ func _commuteCostsForTile(col: int, row: int, zone: int, cityCenter: Vector2) ->
 			densityMultiplier = 0.8
 	return {
 		City.TransportCar: 8.0 + distanceFromCenter * 0.75 * densityMultiplier,
-		City.TransportBus: 10.0 + distanceFromCenter * 0.95 * densityMultiplier,
+		City.TransportSubway: 10.0 + distanceFromCenter * 0.95 * densityMultiplier,
 		City.TransportBike: 5.0 + distanceFromCenter * 1.25 * densityMultiplier,
 		City.TransportWalk: 4.0 + distanceFromCenter * 3.0 * densityMultiplier,
 	}
@@ -408,7 +408,7 @@ func _initialTransportDistribution(zone: int, cityWalkShare: float,
 		bikeShare *= scale
 	return {
 		City.TransportCar: 1.0 - walkShare - bikeShare,
-		City.TransportBus: 0.0,
+		City.TransportSubway: 0.0,
 		City.TransportBike: bikeShare,
 		City.TransportWalk: walkShare,
 	}
@@ -428,7 +428,7 @@ func _secondaryCbdDist(col: int, row: int, cbd: Dictionary) -> float:
 
 func _generateSecondaryCbds(city: City) -> void:
 	_secondaryCbds.clear()
-	var count: int = rng.randi_range(0, 5)
+	var count: int = rng.randi_range(0, 1)
 	if count == 0:
 		return
 	var arterialCols: Array[int] = []

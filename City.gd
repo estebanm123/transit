@@ -1,10 +1,10 @@
 class_name City extends RefCounted
 
-const MapW: int = 335 * 7
-const MapH: int = 187 * 7
+const MapW: int = 586
+const MapH: int = 327
 const Margin: int = 8 
-const Cols: int = 8 * 15
-const Rows: int = 8 * 15
+const Cols: int = 30
+const Rows: int = 30
 
 const WArterial: float = 10.1
 const WCollector: float = 6.1
@@ -15,12 +15,12 @@ const CStreet: Color = Palette.CGrayDeep
 
 const CPark: Color = Palette.CGreen
 const TransportCar: String = "car"
-const TransportBus: String = "bus"
+const TransportSubway: String = "subway"
 const TransportBike: String = "bike"
 const TransportWalk: String = "walk"
 const TransportModes: Array[String] = [
 	TransportCar,
-	TransportBus,
+	TransportSubway,
 	TransportBike,
 	TransportWalk,
 ]
@@ -118,7 +118,7 @@ func _findBlockAxisIndex(pos: float, starts: Array[float], sizes: Array[float]) 
 func getOverallTransportDistribution() -> Dictionary:
 	var totals: Dictionary = {
 		TransportCar: 0.0,
-		TransportBus: 0.0,
+		TransportSubway: 0.0,
 		TransportBike: 0.0,
 		TransportWalk: 0.0,
 	}

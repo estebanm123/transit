@@ -2,15 +2,52 @@ class_name TrafficLayer extends Node2D
 
 var _traffic: Traffic
 var _city: City
-var _transitSystem: TransitSystem
+var _subwaySystem: SubwaySystem
 var paused: bool = false
 var simulationRate: int = 1
+var _subwayStationPreviewVisible: bool = false
+var _subwayStationPreviewValid: bool = false
+var _subwayStationPreviewPosition: Vector2 = Vector2.ZERO
+var _subwayConnectionPreviewVisible: bool = false
+var _subwayConnectionPreviewValid: bool = false
+var _subwayConnectionPreviewSourceIndex: int = -1
+var _subwayConnectionPreviewPosition: Vector2 = Vector2.ZERO
 
 
-func setup(traffic: Traffic, city: City, transitSystem: TransitSystem) -> void:
+func setup(traffic: Traffic, city: City, subwaySystem: SubwaySystem) -> void:
     _traffic = traffic
     _city = city
-    _transitSystem = transitSystem
+    _subwaySystem = subwaySystem
+
+
+func setSubwayStationPreview(worldPosition: Vector2, isValid: bool) -> void:
+    _subwayStationPreviewVisible = true
+    _subwayStationPreviewValid = isValid
+    _subwayStationPreviewPosition = worldPosition
+    queue_redraw()
+
+
+func clearSubwayStationPreview() -> void:
+    if not _subwayStationPreviewVisible:
+        return
+    _subwayStationPreviewVisible = false
+    queue_redraw()
+
+
+func setSubwayConnectionPreview(sourceStationIndex: int, worldPosition: Vector2,
+        isValid: bool) -> void:
+    _subwayConnectionPreviewVisible = true
+    _subwayConnectionPreviewSourceIndex = sourceStationIndex
+    _subwayConnectionPreviewPosition = worldPosition
+    _subwayConnectionPreviewValid = isValid
+    queue_redraw()
+
+
+func clearSubwayConnectionPreview() -> void:
+    if not _subwayConnectionPreviewVisible:
+        return
+    _subwayConnectionPreviewVisible = false
+    queue_redraw()
 
 
 func _process(delta: float) -> void:
@@ -18,8 +55,8 @@ func _process(delta: float) -> void:
         return
     for _i in range(simulationRate):
         _traffic.tick(_city, delta)
-        if _transitSystem != null:
-            _transitSystem.tick(_city, delta)
+        if _subwaySystem != null:
+            _subwaySystem.tick(_city, delta)
     queue_redraw()
 
 
@@ -27,5 +64,14 @@ func _draw() -> void:
     if _traffic == null or _city == null:
         return
     _traffic.drawCars(self)
-    if _transitSystem != null:
-        _transitSystem.drawTransit(self, _city)
+    if _subwaySystem != null:
+        _subwaySystem.drawSubway(self, _city)
+        if _subwayStationPreviewVisible:
+            _subwaySystem.drawSubwayStationPlacementPreview(
+                    self, _subwayStationPreviewPosition, _subwayStationPreviewValid)
+        if _subwayConnectionPreviewVisible:
+            _subwaySystem.drawSubwayConnectionPreview(
+                    self,
+                    _subwayConnectionPreviewSourceIndex,
+                    _subwayConnectionPreviewPosition,
+                    _subwayConnectionPreviewValid)
