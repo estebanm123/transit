@@ -6,8 +6,6 @@ const ZoomStepFactor: float = 1.15
 const TrackpadScrollPixelsPerStep: float = 20.0
 const SimulationRateNormal: int = 1
 const SimulationRateMax: int = 8
-const TileHappyCommuteMinutes: float = 10.0
-const TileMiserableCommuteMinutes: float = 45.0
 
 var _generator: CityGenerator
 var _city: City
@@ -31,7 +29,6 @@ var _hoverTileLabel: Label
 var _abilityStatusLabel: Label
 var _controlsContainer: HBoxContainer
 var _speedButton: Button
-var _congestedButton: Button
 var _abilityButtons: Array[Button] = []
 var _debugShiftHeld: bool = false
 var _debugMouseScreenPos: Vector2 = Vector2.ZERO
@@ -40,6 +37,7 @@ var _paused: bool = false
 var _simulationRate: int = SimulationRateNormal
 var _subwayConnectionDragActive: bool = false
 var _subwayConnectionDragSourceIndex: int = -1
+var _heatmapVisible: bool = false
 
 
 func _ready() -> void:
@@ -90,11 +88,6 @@ func _ready() -> void:
     _speedButton.pressed.connect(_incrementSimulationRate)
     _controlsContainer.add_child(_speedButton)
 
-    _congestedButton = Button.new()
-    _congestedButton.text = "Congested Start (C)"
-    _congestedButton.pressed.connect(_generateCongestedCity)
-    _controlsContainer.add_child(_congestedButton)
-
     _addAbilityButton("Subway Station (S)", "Subway Station")
     _addAbilityButton("Add Subway (V)", "Add Subway")
 
@@ -107,14 +100,15 @@ func _ready() -> void:
     _hudNode.queue_redraw()
 
 
-func _generateCity(startCongested: bool = false) -> void:
+func _generateCity() -> void:
     _city = _generator.generate()
     _traffic = Traffic.new()
     _subwaySystem = SubwaySystem.new()
     _subwaySystem.init(_city)
-    _traffic.init(_city, _subwaySystem, startCongested)
+    _traffic.init(_city, _subwaySystem)
     _cityLayer.setup(_city)
     _trafficLayer.setup(_traffic, _city, _subwaySystem)
+    _trafficLayer.paused = _paused
     _trafficLayer.simulationRate = _simulationRate
     _debugger = TrafficDebugger.new()
     _debugger.init(_traffic)
@@ -123,6 +117,7 @@ func _generateCity(startCongested: bool = false) -> void:
     _subwayConnectionDragActive = false
     _subwayConnectionDragSourceIndex = -1
     _updateAbilityStatus()
+    _applyViewMode()
     _updateLayerTransforms()
 
 
@@ -136,14 +131,26 @@ func _incrementSimulationRate() -> void:
     _hudNode.queue_redraw()
 
 
-func _generateCongestedCity() -> void:
-    _generateCity(true)
-    queue_redraw()
-    _hudNode.queue_redraw()
-
-
 func _updateSpeedButton() -> void:
     _speedButton.text = "Speed x%d (F)" % _simulationRate
+
+
+func _toggleHeatmapView() -> void:
+    _heatmapVisible = not _heatmapVisible
+    _applyViewMode()
+    _refreshCommuteVisualization()
+
+
+func _applyViewMode() -> void:
+    var nextCityLayerMode: int = CityLayer.ViewModeCommuteHeatmap \
+            if _heatmapVisible else CityLayer.ViewModeLandUse
+    _cityLayer.setViewMode(nextCityLayerMode)
+    _trafficLayer.setShowTrafficOverlay(not _heatmapVisible)
+
+
+func _refreshCommuteVisualization() -> void:
+    _cityLayer.queue_redraw()
+    _hudNode.queue_redraw()
 
 
 func _addAbilityButton(buttonText: String, abilityName: String) -> void:
@@ -206,6 +213,7 @@ func _handleSubwayStationPressed(worldPosition: Vector2) -> void:
         return
     if _abilityManager.applySelectedAtWorldPosition(worldPosition):
         _trafficLayer.queue_redraw()
+        _refreshCommuteVisualization()
     _updateAbilityStatus()
 
 
@@ -232,18 +240,28 @@ func _updateSubwayConnectionPreview(worldPosition: Vector2) -> void:
     var placement: SubwaySystem.SubwayStationPlacement = _subwaySystem.getSubwayStationPlacement(
             _city, worldPosition)
     var isValid: bool = _canFinishSubwayConnection(worldPosition, placement)
+    var previewPosition: Vector2 = _getSubwayConnectionPreviewPosition(worldPosition, placement)
     _trafficLayer.setSubwayConnectionPreview(
-            _subwayConnectionDragSourceIndex, placement.worldPosition, isValid)
+            _subwayConnectionDragSourceIndex, previewPosition, isValid)
 
 
 func _finishSubwayConnectionDrag(worldPosition: Vector2) -> void:
     var placement: SubwaySystem.SubwayStationPlacement = _subwaySystem.getSubwayStationPlacement(
             _city, worldPosition)
+    var didConnect: bool = false
     if _canFinishSubwayConnection(worldPosition, placement):
-        var station: RefCounted = _subwaySystem.addConnectedSubwayStation(
-                _city, _subwayConnectionDragSourceIndex, placement.worldPosition)
-        if station != null:
-            _traffic.refreshTransitImpacts()
+        var targetStationIndex: int = (
+                _subwaySystem.getSubwayStationIndexAtWorldPosition(worldPosition))
+        if targetStationIndex >= 0:
+            didConnect = _subwaySystem.connectSubwayStations(
+                    _subwayConnectionDragSourceIndex, targetStationIndex)
+        else:
+            var station: RefCounted = _subwaySystem.addConnectedSubwayStation(
+                    _city, _subwayConnectionDragSourceIndex, placement.worldPosition)
+            didConnect = station != null
+    if didConnect:
+        _traffic.refreshTransitImpacts()
+        _refreshCommuteVisualization()
     _subwayConnectionDragActive = false
     _subwayConnectionDragSourceIndex = -1
     _trafficLayer.clearSubwayConnectionPreview()
@@ -257,13 +275,23 @@ func _canFinishSubwayConnection(worldPosition: Vector2,
         return false
     if not _subwaySystem.canConnectFromStation(_subwayConnectionDragSourceIndex):
         return false
-    if _subwaySystem.getSubwayStationIndexAtWorldPosition(worldPosition) >= 0:
-        return false
+    var targetStationIndex: int = _subwaySystem.getSubwayStationIndexAtWorldPosition(worldPosition)
+    if targetStationIndex >= 0:
+        return _subwaySystem.canConnectStations(
+                _subwayConnectionDragSourceIndex, targetStationIndex)
     var sourceStation: SubwaySystem.SubwayStation = (
             _subwaySystem.subwayStations[_subwayConnectionDragSourceIndex])
     var minimumDistanceSquared: float = SubwaySystem.StationHitRadius \
             * SubwaySystem.StationHitRadius
     return sourceStation.worldPosition.distance_squared_to(worldPosition) > minimumDistanceSquared
+
+
+func _getSubwayConnectionPreviewPosition(worldPosition: Vector2,
+        placement: SubwaySystem.SubwayStationPlacement) -> Vector2:
+    var targetStationIndex: int = _subwaySystem.getSubwayStationIndexAtWorldPosition(worldPosition)
+    if targetStationIndex >= 0:
+        return _subwaySystem.subwayStations[targetStationIndex].worldPosition
+    return placement.worldPosition
 
 
 func _updateLayerTransforms() -> void:
@@ -303,29 +331,14 @@ func _updateHoverTileLabel() -> void:
         "Tile commute: %.1f / 10  Cars %.0f%%  Subway %.0f%%  Bikes %.0f%%  Walking %.0f%%\n"
         + "Population: %d  Avg commute: %.1f min"
     ) % [
-        _getTileCommuteHappiness(profile),
+        City.getTileCommuteHappiness(profile),
         distribution.get(City.TransportCar, 0.0) * 100.0,
         distribution.get(City.TransportSubway, 0.0) * 100.0,
         distribution.get(City.TransportBike, 0.0) * 100.0,
         distribution.get(City.TransportWalk, 0.0) * 100.0,
         profile.population,
-        _getTileAverageCommuteMinutes(profile),
+        City.getTileAverageCommuteMinutes(profile),
     ]
-
-
-func _getTileAverageCommuteMinutes(profile: City.TileCommuteProfile) -> float:
-    var commuteMinutes: float = 0.0
-    for mode: String in City.TransportModes:
-        commuteMinutes += profile.transportDistribution.get(mode, 0.0) \
-                * profile.commuteCostByMode.get(mode, 0.0)
-    return commuteMinutes
-
-
-func _getTileCommuteHappiness(profile: City.TileCommuteProfile) -> float:
-    var commuteMinutes: float = _getTileAverageCommuteMinutes(profile)
-    var t: float = inverse_lerp(
-            TileHappyCommuteMinutes, TileMiserableCommuteMinutes, commuteMinutes)
-    return (1.0 - clampf(t, 0.0, 1.0)) * 10.0
 
 
 func _process(_delta: float) -> void:
@@ -345,6 +358,8 @@ func _process(_delta: float) -> void:
         if mouseScreen != _debugMouseScreenPos:
             _debugMouseScreenPos = mouseScreen
             _hudNode.queue_redraw()
+    if _heatmapVisible and not _paused and _cityLayer != null and _city != null:
+        _cityLayer.queue_redraw()
 
 
 func _input(event: InputEvent) -> void:
@@ -420,9 +435,8 @@ func _input(event: InputEvent) -> void:
                 _generateCity()
             KEY_F:
                 _incrementSimulationRate()
-            KEY_C:
-                _generator.rng.seed = _generator.rng.randi()
-                _generateCongestedCity()
+            KEY_H:
+                _toggleHeatmapView()
             _:
                 if _abilityManager != null and _abilityManager.selectAbilityByHotkey(event.keycode):
                     if _abilityManager.selectedAbility != null \
@@ -461,33 +475,37 @@ func _draw() -> void:
 
 
 func _drawLegend() -> void:
-    const LegendWidth: float = 180.0
+    const LegendWidth: float = 220.0
     const ItemHeight: float = 26.0
     const Pad: float = 6.0
     const SwatchW: float = 18.0
     const SwatchH: float = 18.0
     const FontSize: int = 14
 
-    var items: Array = [
-        {"c": City.CPark,   "lbl": "Park"},
-        {"c": City.CRes[0], "lbl": "Residential"},
-        {"c": City.CRes[2], "lbl": "Medium Residential"},
-        {"c": City.CRes[3], "lbl": "High-rise Residential"},
-        {"c": City.CCom[0], "lbl": "Commercial"},
-        {"c": City.CInd[1], "lbl": "Office/Industry"},
-    ]
+    var items: Array = _getLegendItems()
+    var legendTitle: String = "Commute Heatmap (H)" if _heatmapVisible else "Land Use"
 
     var vpSize: Vector2 = get_viewport_rect().size
+    var panelHeight: float = items.size() * ItemHeight + Pad * 2 + 24.0
     var legendX: float = vpSize.x - LegendWidth - 12.0
-    var legendY: float = vpSize.y - items.size() * ItemHeight - Pad * 2 - 12.0
+    var legendY: float = vpSize.y - panelHeight - 12.0
 
     _hudNode.draw_rect(
         Rect2(legendX - Pad, legendY - Pad,
-                LegendWidth + Pad * 2, items.size() * ItemHeight + Pad * 2),
+                LegendWidth + Pad * 2, panelHeight + Pad * 2),
         Color(0.0, 0.0, 0.0, 0.60))
+    if _font:
+        _hudNode.draw_string(
+                _font,
+                Vector2(legendX, legendY + 14.0),
+                legendTitle,
+                HORIZONTAL_ALIGNMENT_LEFT,
+                -1,
+                FontSize,
+                Color.WHITE)
 
     for i in items.size():
-        var itemY: float = legendY + i * ItemHeight
+        var itemY: float = legendY + 24.0 + i * ItemHeight
         _hudNode.draw_rect(Rect2(legendX, itemY, SwatchW, SwatchH), items[i]["c"])
         _hudNode.draw_rect(Rect2(legendX, itemY, SwatchW, SwatchH), Color(1, 1, 1, 0.25), false)
         if _font:
@@ -496,6 +514,27 @@ func _drawLegend() -> void:
                 items[i]["lbl"],
                 HORIZONTAL_ALIGNMENT_LEFT, -1, FontSize,
                 Color.WHITE)
+
+
+func _getLegendItems() -> Array:
+    if _heatmapVisible:
+        return [
+            {"c": CityLayer.HeatmapLowColor, "lbl": "Low commute happiness"},
+            {"c": CityLayer.HeatmapMidColor, "lbl": "Mid commute happiness"},
+            {"c": CityLayer.HeatmapHighColor, "lbl": "High commute happiness"},
+            {
+                "c": City.CCom[0].lerp(City.CStreet, CityLayer.HeatmapLandUseMix),
+                "lbl": "Non-residential land use",
+            },
+        ]
+    return [
+        {"c": City.CPark, "lbl": "Park"},
+        {"c": City.CRes[0], "lbl": "Residential"},
+        {"c": City.CRes[2], "lbl": "Medium Residential"},
+        {"c": City.CRes[3], "lbl": "High-rise Residential"},
+        {"c": City.CCom[0], "lbl": "Commercial"},
+        {"c": City.CInd[1], "lbl": "Office/Industry"},
+    ]
 
 
 func _drawDebugOverlay() -> void:

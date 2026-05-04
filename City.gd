@@ -1,10 +1,11 @@
 class_name City extends RefCounted
 
-const MapW: int = 586
-const MapH: int = 327
+const MapScale: int = 5
+const MapW: int = 586 * MapScale
+const MapH: int = 327 * MapScale
 const Margin: int = 8 
-const Cols: int = 30
-const Rows: int = 30
+const Cols: int = 30 * MapScale
+const Rows: int = 30 * MapScale
 
 const WArterial: float = 10.1
 const WCollector: float = 6.1
@@ -43,6 +44,8 @@ const CInd: Array[Color] = [
 	Palette.CGrayDark,
 	Palette.CGrayMid,
 ]
+const TileHappyCommuteMinutes: float = 10.0
+const TileMiserableCommuteMinutes: float = 45.0
 
 
 class TileCommuteProfile extends RefCounted:
@@ -88,6 +91,21 @@ func getCommuteProfile(col: int, row: int) -> TileCommuteProfile:
 	if col < 0 or col >= commuteProfiles[row].size():
 		return null
 	return commuteProfiles[row][col]
+
+
+static func getTileAverageCommuteMinutes(profile: TileCommuteProfile) -> float:
+	var commuteMinutes: float = 0.0
+	for mode: String in TransportModes:
+		commuteMinutes += profile.transportDistribution.get(mode, 0.0) \
+				* profile.commuteCostByMode.get(mode, 0.0)
+	return commuteMinutes
+
+
+static func getTileCommuteHappiness(profile: TileCommuteProfile) -> float:
+	var commuteMinutes: float = getTileAverageCommuteMinutes(profile)
+	var t: float = inverse_lerp(
+			TileHappyCommuteMinutes, TileMiserableCommuteMinutes, commuteMinutes)
+	return (1.0 - clampf(t, 0.0, 1.0)) * 10.0
 
 
 func getTileAtWorldPosition(worldPos: Vector2) -> Vector2i:

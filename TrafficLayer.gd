@@ -12,6 +12,7 @@ var _subwayConnectionPreviewVisible: bool = false
 var _subwayConnectionPreviewValid: bool = false
 var _subwayConnectionPreviewSourceIndex: int = -1
 var _subwayConnectionPreviewPosition: Vector2 = Vector2.ZERO
+var showTrafficOverlay: bool = true
 
 
 func setup(traffic: Traffic, city: City, subwaySystem: SubwaySystem) -> void:
@@ -50,6 +51,13 @@ func clearSubwayConnectionPreview() -> void:
     queue_redraw()
 
 
+func setShowTrafficOverlay(nextShowTrafficOverlay: bool) -> void:
+    if showTrafficOverlay == nextShowTrafficOverlay:
+        return
+    showTrafficOverlay = nextShowTrafficOverlay
+    queue_redraw()
+
+
 func _process(delta: float) -> void:
     if _traffic == null or paused:
         return
@@ -62,6 +70,8 @@ func _process(delta: float) -> void:
 
 func _draw() -> void:
     if _traffic == null or _city == null:
+        return
+    if not showTrafficOverlay:
         return
     _traffic.drawCars(self)
     if _subwaySystem != null:

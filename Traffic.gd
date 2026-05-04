@@ -1,6 +1,5 @@
 class_name Traffic extends RefCounted
 
-const CarCount: int = 250
 const CarSpeedMin: float = 4.25
 const CarSpeedMax: float = 9.35
 const CarLength: float = 2.8
@@ -53,10 +52,8 @@ const CommuteSmoothing: float = 0.2
 const CommuteMinSpeedRatio: float = 0.05
 const HappyCommuteMinutes: float = 2.0
 const MiserableCommuteMinutes: float = 12.0
-const CongestedCarGap: float = 1.4
-const CongestedLeadJitter: float = 1.2
-const CongestedProgressMin: float = 0.02
 const SpawnClearance: float = CarLength + 0.2
+const CarSpawningEnabled: bool = false
 
 
 class Car extends RefCounted:
@@ -120,7 +117,7 @@ var _activeCarsByHome: Dictionary = {}
 var _carsToRemove: Array[Car] = []
 
 
-func init(city: City, subwaySystem: SubwaySystem = null, startCongested: bool = false) -> void:
+func init(city: City, subwaySystem: SubwaySystem = null) -> void:
     _city = city
     _subwaySystem = subwaySystem
     _rng.seed = 99991
@@ -156,7 +153,7 @@ func init(city: City, subwaySystem: SubwaySystem = null, startCongested: bool = 
     _buildUsabilityCache(city)
     _buildResidentialCommuteHomes(city)
     refreshTransitImpacts()
-    _spawnHomeBasedCars(city, startCongested)
+    _spawnHomeBasedCars(city)
     _cars.sort_custom(func(a: Car, b: Car) -> bool: return a.colorIndex < b.colorIndex)
     _buildSegmentMap()
 
@@ -471,13 +468,12 @@ func _buildResidentialCommuteHomes(city: City) -> void:
             _activeCarsByHome[homeTile] = 0
 
 
-func _spawnHomeBasedCars(city: City, spreadAcrossSegments: bool) -> void:
+func _spawnHomeBasedCars(city: City) -> void:
     var occupiedProgressBySegment: Dictionary = {}
     for homeTile: Vector2i in _residentialHomeTiles:
         var desiredCount: int = _desiredCarsByHome.get(homeTile, 0)
         for _carIndex in desiredCount:
-            var car: Car = _spawnCarFromHome(city, homeTile, spreadAcrossSegments,
-                    occupiedProgressBySegment)
+            var car: Car = _spawnCarFromHome(city, homeTile, occupiedProgressBySegment)
             if car == null:
                 continue
             _cars.append(car)
@@ -493,7 +489,7 @@ func _updateMissingCommuteCars(city: City, delta: float) -> void:
         var desiredCount: int = _desiredCarsByHome.get(homeTile, 0)
         var activeCount: int = _activeCarsByHome.get(homeTile, 0)
         while activeCount < desiredCount:
-            var car: Car = _spawnCarFromHome(city, homeTile, false, {})
+            var car: Car = _spawnCarFromHome(city, homeTile, {})
             if car == null:
                 break
             _cars.append(car)
@@ -502,13 +498,13 @@ func _updateMissingCommuteCars(city: City, delta: float) -> void:
             _insertIntoSegment(car)
 
 
-func _spawnCarFromHome(city: City, homeTile: Vector2i, spreadAcrossSegments: bool,
+func _spawnCarFromHome(city: City, homeTile: Vector2i,
         occupiedProgressBySegment: Dictionary) -> Car:
     var homeIntersection: Vector2i = _getClosestTileIntersection(city, homeTile)
     var exits: Array = _getExitSegments(homeIntersection.x, homeIntersection.y, -999, -999)
     if exits.is_empty():
         return null
-    var scatterOnSegment: bool = spreadAcrossSegments or _segmentMap.is_empty()
+    var scatterOnSegment: bool = _segmentMap.is_empty()
     for _attempt in range(12):
         var exit: Array = exits[_rng.randi() % exits.size()]
         var toVertStreet: int = exit[0]
@@ -584,6 +580,8 @@ func _applyTransitSuppression(profile: City.TileCommuteProfile, suppression: flo
 
 
 func _getDesiredCarCountForHome(homeTile: Vector2i) -> int:
+    if not CarSpawningEnabled:
+        return 0
     var profile: City.TileCommuteProfile = _city.getCommuteProfile(homeTile.x, homeTile.y)
     if profile == null:
         return 0
@@ -608,101 +606,6 @@ func _isResidentialZone(zone: int) -> bool:
     return zone == Zone.Residential \
             or zone == Zone.MediumDensityResidential \
             or zone == Zone.HighDensityResidential
-
-
-func _spawnRandomCars(city: City) -> void:
-    var attempts: int = 0
-    while _cars.size() < CarCount and attempts < CarCount * 30:
-        attempts += 1
-        var car: Car = _spawnCar(city)
-        if car != null:
-            _assignGoal(city, car)
-            _cars.append(car)
-
-
-func _spawnCongestedCars(city: City) -> void:
-    var occupiedProgressBySegment: Dictionary = {}
-    var attempts: int = 0
-    while _cars.size() < CarCount and attempts < CarCount * 80:
-        attempts += 1
-        var car: Car = _spawnCongestedCar(city, occupiedProgressBySegment)
-        if car != null:
-            _assignGoal(city, car)
-            _cars.append(car)
-    attempts = 0
-    while _cars.size() < CarCount and attempts < CarCount * 80:
-        attempts += 1
-        var fallbackCar: Car = _spawnCollisionFreeRandomCar(city, occupiedProgressBySegment)
-        if fallbackCar != null:
-            _assignGoal(city, fallbackCar)
-            _cars.append(fallbackCar)
-
-
-func _spawnCar(city: City) -> Car:
-    var isHorizontalSegment: bool = _rng.randf() < 0.5
-    var fromVertStreet: int
-    var fromHorzStreet: int
-    var toVertStreet: int
-    var toHorzStreet: int
-
-    if isHorizontalSegment:
-        fromVertStreet = _rng.randi_range(0, City.Cols - 1)
-        fromHorzStreet = _rng.randi_range(0, City.Rows)
-        if not _horzUsableAt(fromVertStreet, fromHorzStreet):
-            return null
-        toVertStreet = fromVertStreet + 1
-        toHorzStreet = fromHorzStreet
-    else:
-        fromVertStreet = _rng.randi_range(0, City.Cols)
-        fromHorzStreet = _rng.randi_range(0, City.Rows - 1)
-        if not _vertUsableAt(fromVertStreet, fromHorzStreet):
-            return null
-        toVertStreet = fromVertStreet
-        toHorzStreet = fromHorzStreet + 1
-
-    return _createCarOnSegment(city, fromVertStreet, fromHorzStreet,
-            toVertStreet, toHorzStreet, _rng.randf(), false)
-
-
-func _spawnCollisionFreeRandomCar(city: City, occupiedProgressBySegment: Dictionary) -> Car:
-    var car: Car = _spawnCar(city)
-    if car == null:
-        return null
-    var edgeClearance: float = SpawnClearance / car.segLength
-    var minProgress: float = _getIntersectionBoxProgress(car.segLength) + edgeClearance
-    var maxProgress: float = _getStopLineProgress(car.segLength) - edgeClearance
-    if minProgress >= maxProgress:
-        return null
-    car.progress = _rng.randf_range(minProgress, maxProgress)
-    var segment := Vector4i(car.fromVertStreet, car.fromHorzStreet,
-            car.toVertStreet, car.toHorzStreet)
-    if not _reserveSpawnProgress(segment, car.progress, car.segLength, occupiedProgressBySegment):
-        return null
-    return car
-
-
-func _spawnCongestedCar(city: City, occupiedProgressBySegment: Dictionary) -> Car:
-    var intersection: Vector2i = _pickWeightedZoneIntersection()
-    var incomingSegments: Array[Vector4i] = _getIncomingSegments(intersection)
-    if incomingSegments.is_empty():
-        return null
-    var segment: Vector4i = incomingSegments[_rng.randi() % incomingSegments.size()]
-    var segLength: float = _getSegmentLength(segment.x, segment.y, segment.z, segment.w)
-    if segLength < 0.5:
-        return null
-    var stopProgress: float = _getStopLineProgress(segLength)
-    var segmentProgresses: Array = occupiedProgressBySegment.get(segment, [])
-    var queueIndex: int = segmentProgresses.size()
-    var queueDistance: float = queueIndex * (CarLength + CongestedCarGap) \
-            + _rng.randf_range(0.0, CongestedLeadJitter)
-    var progress: float = stopProgress - queueDistance / segLength
-    var minProgress: float = maxf(CongestedProgressMin,
-            _getIntersectionBoxProgress(segLength) + SpawnClearance / segLength)
-    if progress < minProgress:
-        return null
-    if not _reserveSpawnProgress(segment, progress, segLength, occupiedProgressBySegment):
-        return null
-    return _createCarOnSegment(city, segment.x, segment.y, segment.z, segment.w, progress, true)
 
 
 func _createCarOnSegment(city: City, fromVertStreet: int, fromHorzStreet: int,
@@ -754,34 +657,6 @@ func _reserveSpawnProgress(segment: Vector4i, progress: float, segLength: float,
     segmentProgresses.append(progress)
     occupiedProgressBySegment[segment] = segmentProgresses
     return true
-
-
-func _getIncomingSegments(intersection: Vector2i) -> Array[Vector4i]:
-    var segments: Array[Vector4i] = []
-    if _horzUsableAt(intersection.x - 1, intersection.y):
-        segments.append(Vector4i(intersection.x - 1, intersection.y,
-                intersection.x, intersection.y))
-    if _horzUsableAt(intersection.x, intersection.y):
-        segments.append(Vector4i(intersection.x + 1, intersection.y,
-                intersection.x, intersection.y))
-    if _vertUsableAt(intersection.x, intersection.y - 1):
-        segments.append(Vector4i(intersection.x, intersection.y - 1,
-                intersection.x, intersection.y))
-    if _vertUsableAt(intersection.x, intersection.y):
-        segments.append(Vector4i(intersection.x, intersection.y + 1,
-                intersection.x, intersection.y))
-    return segments
-
-
-func _pickWeightedZoneIntersection() -> Vector2i:
-    var tile: Vector2i = _pickGoalTile()
-    var corners: Array[Vector2i] = [
-        Vector2i(tile.x, tile.y),
-        Vector2i(tile.x + 1, tile.y),
-        Vector2i(tile.x, tile.y + 1),
-        Vector2i(tile.x + 1, tile.y + 1),
-    ]
-    return corners[_rng.randi() % corners.size()]
 
 
 func _isRedForCar(car: Car, key: Vector2i) -> bool:

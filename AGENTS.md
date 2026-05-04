@@ -5,9 +5,8 @@
 - use type annotations when declaring variables
 - no code comments unless the code is very unintuitive
 - descriptive variable names
-- new 
+- if a file reaches a certain size break it down into smaller logical pieces. Same principle with large methods more than 100 lines - break them down. Try to ensure code is modular when applicable.
 ## General
 - Godot version is 4.5 - some Godot 3 APIs are not available
 - Do not create uid files, Godot will create them automatically.
-- Run get_errors after modifying GDScript
 - If writing any loops, think about how many times it will iterate and if we should consider some optimizations.

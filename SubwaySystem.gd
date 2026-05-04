@@ -69,7 +69,7 @@ func addConnectedSubwayStation(city: City, sourceStationIndex: int,
 	return station
 
 
-func connectSubwayStations(sourceStationIndex: int, targetStationIndex: int) -> bool:
+func canConnectStations(sourceStationIndex: int, targetStationIndex: int) -> bool:
 	if sourceStationIndex == targetStationIndex:
 		return false
 	if not _isValidStationIndex(sourceStationIndex) or not _isValidStationIndex(targetStationIndex):
@@ -78,9 +78,18 @@ func connectSubwayStations(sourceStationIndex: int, targetStationIndex: int) -> 
 	var targetStation: SubwayStation = subwayStations[targetStationIndex]
 	if sourceStation.connections.has(targetStationIndex):
 		return false
-	if sourceStation.connections.size() >= MaxStationConnections \
-			or targetStation.connections.size() >= MaxStationConnections:
+	if sourceStation.connections.size() >= MaxStationConnections:
 		return false
+	if targetStation.connections.size() >= MaxStationConnections:
+		return false
+	return true
+
+
+func connectSubwayStations(sourceStationIndex: int, targetStationIndex: int) -> bool:
+	if not canConnectStations(sourceStationIndex, targetStationIndex):
+		return false
+	var sourceStation: SubwayStation = subwayStations[sourceStationIndex]
+	var targetStation: SubwayStation = subwayStations[targetStationIndex]
 	sourceStation.connections.append(targetStationIndex)
 	targetStation.connections.append(sourceStationIndex)
 	return true
